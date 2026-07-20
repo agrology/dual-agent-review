@@ -1,0 +1,11 @@
+*.dual-agent-review.log
+*.dual-agent-watch.lock/
+.DS_Store
+.dual-agent/
+
+# Internal design history — excluded from the public repo
+/docs/specs/
+/docs/plans/
+/docs/superpowers/
+/.superpowers/
+/.dual-agent/

@@ -1,0 +1,8 @@
+{
+  "name": "dual-agent-review",
+  "description": "Human-gated dual-agent review: a Claude author agent and an external reviewer agent converge on a spec/plan/PR doc through bounded rounds, ending at a human approval gate.",
+  "version": "1.1.0",
+  "author": { "name": "Agrology" },
+  "homepage": "https://github.com/agrology/dual-agent-review",
+  "license": "Apache-2.0"
+}

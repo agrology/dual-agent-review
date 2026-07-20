@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dual Review"
+  short_description: "Review dual-agent protocol docs"
+  default_prompt: "Use /dual-review to review a dual-agent review document."
