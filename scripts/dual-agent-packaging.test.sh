@@ -59,4 +59,12 @@ if [[ -f "$DR" ]]; then
     || bad "degradation message does not mention DUAL_AGENT_REVIEWER=fable"
 fi
 
+# --- §2's awaiting-reviewer branch defers to route resolution before arming (seam regression) ---
+if [[ -f "$DR" ]]; then
+  awaiting_reviewer_block="$(awk '/\*\*`awaiting-reviewer`\*\* → resolve the doc.s canonical/{flag=1} flag{print} flag && /Then arm|carry out the arm-the-watcher/{exit}' "$DR")"
+  echo "$awaiting_reviewer_block" | grep -q 'Go to §2\.5' \
+    && ok "§2 awaiting-reviewer branch defers to §2.5 before arming" \
+    || bad "§2 awaiting-reviewer branch does not defer to §2.5 before arming"
+fi
+
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]

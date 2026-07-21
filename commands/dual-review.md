@@ -57,8 +57,10 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "$ARGUMENTS"`.
     (`"$(cd "$(dirname "<doc>")" && pwd -P)/$(basename "<doc>")"`) and tell the engineer:
     "author mode armed on `<abs-path>` — give your reviewer exactly this path." The
     absolute path is the rendezvous: a relative path breaks when the reviewer's session
-    opens in a different checkout (worktree siblings carry same-named docs). Then arm the
-    watcher (below) and wait.
+    opens in a different checkout (worktree siblings carry same-named docs). **STOP — do
+    NOT arm yet.** Go to §2.5 first to resolve the route. Only carry out the arm-the-watcher
+    steps below (arm, then verify) if §2.5's attended state sends you back here; the default
+    unattended route (§3.5) never reaches this arming step at all.
   - **anything else** (`awaiting-author`, `converged`, `exhausted`) → it is already your move:
     handle it NOW via §3. Do NOT arm a watcher first — waiting on a doc the reviewer will
     never edit again deadlocks the loop.
@@ -89,7 +91,9 @@ Unless the engineer passed `--attended`, this command drives the review **unatte
 
 **Attended state** (also what `--attended` selects directly): emit the reviewer prompt with
 `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh prompt "<doc>" --reviewer <id>`, print the canonical
-absolute doc path, arm the watcher per §2, and wait. This is the pre-existing `/dual-review`
+absolute doc path, then **return to §2's `awaiting-reviewer` branch and carry out its
+arm-the-watcher steps now** — that is the deliberate hand-back §2's deferral sent you here to
+receive, not a fresh path to improvise. This is the pre-existing `/dual-review`
 behavior, with the prompt already prepared for the chosen provider. There is no second
 fallback tier.
 
