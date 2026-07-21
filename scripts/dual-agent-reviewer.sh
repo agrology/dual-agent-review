@@ -195,14 +195,64 @@ cmd_notice() { # <author-model-id> [--reviewer <id>] -> one line or nothing; alw
   return 0
 }
 
-# Disclosure-shaped lines inside fenced code blocks are documentation, not protocol. The
-# engines strip fences the same way; this is a deliberate small duplication so that
-# dual-agent-core.sh stays untouched (it is a CLI, not a sourceable library).
+# Disclosure-shaped lines inside fenced code blocks are documentation, not protocol. This is a
+# deliberate small duplication of dual-agent-core.sh's strip_fences (it is a CLI, not a
+# sourceable library, so it cannot be imported here) — kept semantically IDENTICAL to it:
+# CommonMark fence rules, no awk interval exprs (macOS awk lacks them). An opening fence is a
+# line of >=3 backticks with AT MOST 3 leading spaces (4+ leading spaces is an indented code
+# block, not a fence, and must stay visible); the closing fence must be >= the opener's length.
+# A naive "any-leading-space, parity-toggle" version disagrees with the core engine on indented
+# fences — it hides a disclosure the core engine would treat as a live, unresolved thread.
 strip_fences() { # <file>
   awk '
-    /^[[:space:]]*```/ { inf = !inf; next }
-    !inf { print }
+    {
+      s = $0
+      sub(/^ ? ? ?/, "", s)                 # CommonMark allows up to 3 leading spaces
+      ticks = 0
+      if (match(s, /^`+/)) ticks = RLENGTH
+      if (infence) {
+        if (ticks >= fence_len) {
+          rest = substr(s, ticks + 1); gsub(/[ \t]/, "", rest)
+          if (rest == "") { infence = 0; fence_len = 0; next }   # closing fence
+        }
+        next                                  # inside fence — drop
+      }
+      if (ticks >= 3) { infence = 1; fence_len = ticks; next }    # opening fence — drop
+      print
+    }
   ' "$1"
+}
+
+# The line where a fence opened but never closed, else empty — mirrors
+# dual-agent-core.sh's unterminated_fence_line. An unterminated fence makes strip_fences
+# silently drop every line after it, including a disclosure that would have failed the
+# identity check, so callers MUST refuse rather than report a pass on an unparseable doc.
+unterminated_fence_line() { # <file>
+  awk '
+    {
+      s = $0; sub(/^ ? ? ?/, "", s)
+      ticks = 0; if (match(s, /^`+/)) ticks = RLENGTH
+      if (infence) {
+        if (ticks >= fence_len) { rest = substr(s, ticks + 1); gsub(/[ \t]/, "", rest); if (rest == "") { infence = 0; fence_len = 0 } }
+      } else if (ticks >= 3) { infence = 1; fence_len = ticks; open_ln = NR }
+    }
+    END { if (infence) print open_ln }
+  ' "$1"
+}
+
+assert_balanced_fences() { # <file> — hard error (exit 1) on an unterminated code fence
+  local file="$1" ln
+  ln="$(unterminated_fence_line "$file")"
+  [[ -z "$ln" ]] \
+    || die "unterminated code fence in ${file} opened at line ${ln}: protocol lines after it are invisible — refusing to verify" 1
+}
+
+# Top-level protocol-comment lines of ANY grammar (asymmetric or peer-review) — used only to
+# detect "the turn added comments but contributed no usable disclosure" below. Never used to
+# attribute an identity, so duplicate lines are deliberately kept (sorted, not uniqued) to match
+# via_ids' multiset semantics.
+protocol_lines() { # <file>
+  strip_fences "$1" | grep -E '^> \[(reviewer|author: resolved|finding|concur|dispute|withdraw):' 2>/dev/null | sort
 }
 
 via_ids() { # <file> -> disclosed model ids, one per line, sorted — DUPLICATES PRESERVED
@@ -241,6 +291,10 @@ cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
   [[ -n "$doc"  ]] || die "usage: dual-agent-reviewer.sh verify-vendor --baseline <snap> <doc> [--reviewer <id>]" 2
   [[ -f "$doc"  ]] || die "doc not found: $doc" 2
 
+  # An identity check that cannot parse a doc must not report "pass" — refuse both files.
+  assert_balanced_fences "$base"
+  assert_balanced_fences "$doc"
+
   local row rid rvendor
   row="$(resolve_row "${rest[@]+"${rest[@]}"}")" || exit 2
   rid="$(field "$row" 1)"; rvendor="$(field "$row" 2)"
@@ -248,9 +302,19 @@ cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
   # Only ids NEW in <doc> relative to <baseline>. There is deliberately no author-id
   # exemption: the baseline is taken immediately before dispatch, so every new disclosure
   # belongs to the reviewer turn by construction.
-  local new_ids id v
+  local new_ids id v new_protocol
   new_ids="$(comm -13 <(via_ids "$base") <(via_ids "$doc"))"
-  [[ -n "$new_ids" ]] || return 0
+  if [[ -z "$new_ids" ]]; then
+    # The turn may still have added protocol comments (marker/finding lines) that contributed
+    # zero MAPPABLE disclosures — a missing "> — via" line, an ASCII hyphen / en dash instead
+    # of the required em dash, or an empty id all fall through via_ids' regex. Omitting or
+    # mangling a disclosure must not be an easier bypass than fabricating a wrong one.
+    new_protocol="$(comm -13 <(protocol_lines "$base") <(protocol_lines "$doc"))"
+    if [[ -n "$new_protocol" ]]; then
+      die "reviewer turn added protocol comment(s) but no usable '> — via <model-id>' disclosure (missing, or not the required em dash '—')" 1
+    fi
+    return 0
+  fi
 
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue

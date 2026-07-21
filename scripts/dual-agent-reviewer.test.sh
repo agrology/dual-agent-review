@@ -313,6 +313,61 @@ bash "$SUT" verify-vendor "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
 bash "$SUT" verify-vendor --baseline "${WORK}/nope.md" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "verify-vendor with a missing baseline file exits 2" || bad "bad baseline rc=$rc (want 2)"
 
+# --- security fix: verify-vendor fence handling must match dual-agent-core.sh, and a turn ---
+# --- that adds findings with no usable disclosure must fail, not pass silently ---
+
+# FINDING 1 case A: an unterminated fence must fail closed (die 1), not silently swallow every
+# line after it — including the disclosure that would have failed the identity check.
+P="$(mkpair unterminated-fence '' '```\n> [reviewer:r1] x\n> — via claude-sonnet-4-6\n')"
+err="$(bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex 2>&1 >/dev/null)"; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor fails closed on an unterminated fence" \
+  || bad "unterminated fence rc=$rc (want 1)"
+grep -qi 'unterminated' <<<"$err" && ok "unterminated-fence error names the problem" || bad "error unclear: '$err'"
+
+# FINDING 1 case G: a 4-space-indented ``` is NOT a fence per CommonMark (matches
+# dual-agent-core.sh's strip_fences, which would report r1 as a LIVE open thread here) — the
+# enclosed disclosure must stay VISIBLE and be judged normally, so the out-of-vendor id inside
+# it is a real mismatch, not a hidden pass.
+P="$(mkpair indented-fence '' '    ```\n> [reviewer:r1] x\n> — via claude-sonnet-4-6\n    ```\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor treats a 4-space-indented fence as NOT a fence (disclosure judged)" \
+  || bad "indented-fence rc=$rc (want 1) — naive parity toggle swallowed the disclosure?"
+
+# Regression: a WELL-FORMED, unindented fence (marker line AND disclosure both inside) must
+# still be ignored entirely — the fence-rule fix must not turn this into a false mismatch or a
+# false "findings, no disclosure" failure.
+P="$(mkpair wellformed-fence '' '```text\n> [reviewer:r1] x\n> — via claude-sonnet-4-6\n```\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor still ignores a well-formed fenced example (no regression)" \
+  || bad "well-formed fence regressed (rc=$rc, want 0)"
+
+# FINDING 2: a turn that adds protocol comments but ZERO usable disclosures must fail, not pass
+# silently — omitting a disclosure must not be an easier bypass than faking one.
+P="$(mkpair no-disclosure '' '> [reviewer:r1] x\n')"
+err="$(bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex 2>&1 >/dev/null)"; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor fails when the turn adds findings with no disclosure at all" \
+  || bad "no-disclosure rc=$rc (want 1)"
+[[ -n "$err" ]] && ok "no-disclosure failure has a reason" || bad "no-disclosure reason was empty"
+
+# FINDING 2 variant: an ASCII hyphen ('> - via ...') is not the required em dash — this must be
+# judged the same as "no disclosure", not accepted as one.
+P="$(mkpair ascii-hyphen '' '> [reviewer:r1] x\n> - via claude-sonnet-4-6\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor rejects an ASCII-hyphen '- via' as a fake disclosure" \
+  || bad "ascii-hyphen rc=$rc (want 1)"
+
+# FINDING 2 variant: an en dash ('–', U+2013) is not the required em dash ('—', U+2014).
+P="$(mkpair endash '' '> [reviewer:r1] x\n> – via claude-sonnet-4-6\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor rejects an en-dash '– via' as a fake disclosure" \
+  || bad "en-dash rc=$rc (want 1)"
+
+# FINDING 2 variant: '> — via' with an empty id is not a usable disclosure.
+P="$(mkpair emptyid '' '> [reviewer:r1] x\n> — via \n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor rejects '> — via' with an empty id" \
+  || bad "empty-id rc=$rc (want 1)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
