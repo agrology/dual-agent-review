@@ -176,6 +176,25 @@ cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
   esac
 }
 
+cmd_notice() { # <author-model-id> [--reviewer <id>] -> one line or nothing; always exit 0
+  local author="${1:-}"
+  [[ -n "$author" ]] || die "usage: dual-agent-reviewer.sh notice <author-model-id> [--reviewer <id>]" 2
+  shift
+  local row rid rvendor avendor
+  row="$(resolve_row "$@")" || exit 2
+  rid="$(field "$row" 1)"; rvendor="$(field "$row" 2)"
+  if ! avendor="$(vendor_of_model "$author")"; then
+    # Never silent on failure: silence from this command must always mean "checked and
+    # cross-vendor", so an unmappable id says so out loud instead of looking like a pass.
+    echo "note: cannot determine author vendor from '${author}' — same-vendor status unverified"
+    return 0
+  fi
+  if [[ "$avendor" == "$rvendor" ]]; then
+    echo "note: same-vendor review — author (${author}) and reviewer (${rid}) are both ${rvendor}; independence is contextual (fresh context, different weights), not architectural"
+  fi
+  return 0
+}
+
 # --- dispatch -------------------------------------------------------------
 sub="${1:-}"; [[ -n "$sub" ]] || die "usage: dual-agent-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor> [args]" 2
 shift
@@ -184,5 +203,6 @@ case "$sub" in
   check)   cmd_check "$@" ;;
   prompt)  cmd_prompt "$@" ;;
   command) cmd_command "$@" ;;
+  notice)  cmd_notice "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
 esac

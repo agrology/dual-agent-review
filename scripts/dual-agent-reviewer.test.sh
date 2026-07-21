@@ -224,6 +224,32 @@ nuls_pinned="$(tr -dc '\0' < "${WORK}/argv-pinned.bin" | wc -c | tr -d ' ')"
 [[ "$nuls_pinned" == "5" ]] && ok "pinned argv stream carries exactly 5 NUL terminators (5 elements)" \
   || bad "pinned NUL count was '$nuls_pinned' (want 5)"
 
+# --- notice: same-vendor pairing warns (author Claude + reviewer Fable) ---
+out="$(bash "$SUT" notice claude-opus-4-8 --reviewer fable 2>/dev/null)"; rc=$?
+[[ "$rc" == 0 ]] && ok "notice exits 0 on a same-vendor pairing" || bad "notice same-vendor rc=$rc (want 0)"
+[[ -n "$out" ]] && ok "notice warns on a same-vendor pairing" || bad "notice was silent on same-vendor"
+grep -qi 'same-vendor' <<<"$out" && ok "notice names the same-vendor condition" || bad "notice text unclear: '$out'"
+
+# --- notice: cross-vendor pairing is SILENT (author Claude + reviewer Codex) ---
+out="$(bash "$SUT" notice claude-opus-4-8 --reviewer codex 2>/dev/null)"; rc=$?
+[[ "$rc" == 0 ]] && ok "notice exits 0 on a cross-vendor pairing" || bad "notice cross-vendor rc=$rc (want 0)"
+[[ -z "$out" ]] && ok "notice is silent on a cross-vendor pairing" || bad "notice spoke on cross-vendor: '$out'"
+
+# --- notice: cross-vendor the other way (author GPT + reviewer Gemini) ---
+out="$(bash "$SUT" notice gpt-5-codex --reviewer gemini 2>/dev/null)"
+[[ -z "$out" ]] && ok "notice is silent for GPT author + Gemini reviewer" || bad "notice spoke: '$out'"
+
+# --- notice: an UNRECOGNISED author id fails LOUD, not silent ---
+out="$(bash "$SUT" notice totally-unknown-model --reviewer codex 2>/dev/null)"; rc=$?
+[[ "$rc" == 0 ]] && ok "notice exits 0 on an unmappable author id" || bad "notice unknown-id rc=$rc (want 0)"
+[[ -n "$out" ]] && ok "notice speaks on an unmappable author id (never silent)" || bad "notice was SILENT on an unmappable id"
+grep -qi 'unverified' <<<"$out" && ok "notice marks the status unverified" || bad "unverified wording missing: '$out'"
+grep -qF 'totally-unknown-model' <<<"$out" && ok "notice names the unmappable id" || bad "notice did not name the id"
+
+# --- notice: usage ---
+bash "$SUT" notice >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "notice with no author id exits 2" || bad "notice no-arg rc=$rc (want 2)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
