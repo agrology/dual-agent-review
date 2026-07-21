@@ -32,6 +32,52 @@ Copy the skill directory from this repo (`.agents/skills/dual-review/`) into you
 same relative path, then run Codex **from your repo's root** so the bundled paths resolve.
 See "Usage (file-coordination)" below for how the two sides then converge.
 
+### Choosing the reviewer model
+
+The reviewer defaults to **Codex/GPT**. To use a different one, set `DUAL_AGENT_REVIEWER`:
+
+| value | reviewer | needs |
+|---|---|---|
+| `codex` *(default)* | Codex/GPT via the local Codex CLI | `codex` on PATH, authenticated |
+| `fable` | Claude Fable 5 as a subagent | nothing — runs in-harness |
+| `gemini` | Gemini via the `gemini` CLI | `gemini` on PATH, authenticated |
+
+```bash
+export DUAL_AGENT_REVIEWER=fable
+```
+
+**Which model each provider runs.** Defaults prefer a *provider-published* alias over a version
+pinned in this repo, so a new release is picked up without a code change:
+
+| provider | default model | why |
+|---|---|---|
+| `codex` | `gpt-5.5` | OpenAI publishes no "latest" alias, so a named default is unavoidable. It must be non-empty — an unset model lets the `codex:codex-rescue` wrapper answer as Claude. |
+| `fable` | `fable` | Already an alias the harness resolves; no version here to go stale. |
+| `gemini` | `gemini-pro-latest` | Google's own alias for the top Pro tier. Without an explicit `-m` the CLI falls back to the cheaper *flash* tier, which is a weaker reviewer. **Note:** this alias currently resolves to a **preview** model (`gemini-3.1-pro-preview` at time of writing), and preview models can change or be withdrawn. Pin `DUAL_AGENT_REVIEWER_MODEL` if you need a fixed, non-preview model. |
+
+`DUAL_AGENT_REVIEWER_MODEL` overrides the default for whichever provider is selected — nothing
+above is unoverridable. It names a model, not a provider, so if you switch providers you will
+usually want to unset it. Whatever model runs, `verify-vendor` still checks that the id it
+discloses belongs to the selected provider's vendor.
+
+> **A `> — via` line is the reviewer's own claim about itself, and models are unreliable
+> narrators of their own identity.** Observed here: a turn served by `gemini-3.1-pro-preview`
+> disclosed itself as `gemini-2.5-pro`, and asking `gemini-3.1-pro-preview` directly produced
+> the same wrong answer — models tend to report a training-era identity rather than the model
+> actually serving the request. This is precisely why `verify-vendor` matches at **vendor**
+> level and not on the exact id: both of those ids map to `google`, so the turn verifies
+> correctly, whereas exact-id matching would have hard-failed a perfectly legitimate review.
+> Treat disclosure lines as provenance for *who answered*, not as a reliable model version.
+> To find out which model actually served a request, read the API's server-reported
+> `modelVersion` — not the model's own words.
+
+**Independence tiers.** A cross-vendor reviewer (`codex`, `gemini`) gives *architectural*
+independence: different vendor, different model family, separate reasoning. A same-vendor
+reviewer (`fable`) gives fresh context and different weights, but shares a training lineage
+with the Claude author — real value, weaker claim. `dual-agent-reviewer.sh notice` reports a
+same-vendor pairing so the distinction is visible when you are deciding rather than buried
+here; the autonomous route surfaces it at the human gate automatically.
+
 ## Layout
 
 - `docs/dual-agent-review.md` — the protocol contract
