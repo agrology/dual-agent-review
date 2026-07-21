@@ -46,14 +46,16 @@ The reviewer defaults to **Codex/GPT**. To use a different one, set `DUAL_AGENT_
 export DUAL_AGENT_REVIEWER=fable
 ```
 
-`DUAL_AGENT_REVIEWER_MODEL` optionally pins a specific model for CLI-backed providers.
+`DUAL_AGENT_REVIEWER_MODEL` optionally pins a specific model for the `gemini` provider.
+`codex` is deliberately pinned to `gpt-5.5` and ignores this variable, so an unset model
+cannot silently downgrade the reviewer to its Claude wrapper.
 
 **Independence tiers.** A cross-vendor reviewer (`codex`, `gemini`) gives *architectural*
 independence: different vendor, different model family, separate reasoning. A same-vendor
 reviewer (`fable`) gives fresh context and different weights, but shares a training lineage
-with the Claude author — real value, weaker claim. The tool prints a note at the human gate
-when author and reviewer share a vendor, so the distinction is visible when you are deciding,
-not buried here.
+with the Claude author — real value, weaker claim. `dual-agent-reviewer.sh notice` reports a
+same-vendor pairing so the distinction is visible when you are deciding rather than buried
+here; the autonomous route surfaces it at the human gate automatically.
 
 ## Layout
 
