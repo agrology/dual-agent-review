@@ -71,6 +71,38 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "$ARGUMENTS"`.
   `awaiting-reviewer`, stop your turn and wait to be re-woken when the task exits.
   Otherwise stop the watcher task and handle the new state via §3 NOW.
 
+## 2.5 Resolve the route (autonomous by default)
+
+Unless the engineer passed `--attended`, this command drives the review **unattended**:
+
+1. `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh resolve` → `id|vendor|kind|model|has-skill`.
+   A non-zero exit means an unknown provider — report it and STOP.
+2. `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh check --reviewer <id>`.
+   - **exit 0** → run the unattended loop in §3.5.
+   - **non-zero** → announce the reason verbatim, then degrade to the attended state below.
+     Never degrade silently.
+
+**Degradation message** (print the `check` reason, then this):
+
+    <reason> — falling back to manual handoff. For zero-dependency autonomous review, set
+    DUAL_AGENT_REVIEWER=fable (same-vendor; see independence tiers in the README).
+
+**Attended state** (also what `--attended` selects directly): emit the reviewer prompt with
+`${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh prompt "<doc>" --reviewer <id>`, print the canonical
+absolute doc path, arm the watcher per §2, and wait. This is the pre-existing `/dual-review`
+behavior, with the prompt already prepared for the chosen provider. There is no second
+fallback tier.
+
+The **provider never changes on its own** — only the route degrades. If the engineer wants a
+different reviewer they set `DUAL_AGENT_REVIEWER` or pass `--reviewer`; the tool will not
+silently substitute one.
+
+**Resolve once, carry it through.** The row produced by step 1 is fixed for the entire run —
+§3.5 reuses it and never re-resolves. Provider selection is therefore read exactly once, at a
+point where the choice is announced, rather than re-read each round where a mutable env var
+could swap reviewers mid-review without anyone noticing. Switching provider means ending the
+run and re-invoking the command.
+
 ## 3. On each wake — branch on the marker ONLY
 
 Read it with `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh marker "<doc>"`:

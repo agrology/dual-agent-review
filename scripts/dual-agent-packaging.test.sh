@@ -46,4 +46,17 @@ case "$verdict" in
 esac
 rm -rf "$tmpcwd" "$D2"
 
+# --- route resolution is documented in the author command (spec §3) ---
+DR="${ROOT}/commands/dual-review.md"
+if [[ -f "$DR" ]]; then
+  grep -q 'dual-agent-reviewer.sh' "$DR" && ok "dual-review.md uses the reviewer registry" \
+    || bad "dual-review.md does not reference dual-agent-reviewer.sh"
+  grep -qi 'attended' "$DR" && ok "dual-review.md documents the --attended escape hatch" \
+    || bad "dual-review.md lacks --attended"
+  grep -qiE 'degrad|falling back' "$DR" && ok "dual-review.md documents announced degradation" \
+    || bad "dual-review.md lacks the degradation path"
+  grep -qi 'DUAL_AGENT_REVIEWER=fable' "$DR" && ok "degradation message points at the zero-dep provider" \
+    || bad "degradation message does not mention DUAL_AGENT_REVIEWER=fable"
+fi
+
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]
