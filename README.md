@@ -18,7 +18,7 @@ As a Claude Code plugin:
 This installs the `/dual-review` and `/dual-review-auto` slash commands and their supporting
 scripts. It does **not** install the reviewer side — see "Reviewer setup" below.
 
-## Reviewer setup (BYO-Codex)
+## Reviewer setup (BYO reviewer)
 
 The reviewer agent is a separate tool you bring yourself; it does **not** appear automatically
 on plugin install. You need:
@@ -78,11 +78,60 @@ with the Claude author — real value, weaker claim. `dual-agent-reviewer.sh not
 same-vendor pairing so the distinction is visible when you are deciding rather than buried
 here; the autonomous route surfaces it at the human gate automatically.
 
+### Manual (two-session) route, per provider
+
+The manual route is the dependency-free option — it needs no CLI and no plugin. It is not the
+default (the unattended route is; see "Autonomous review"), but it is what you get via
+`--attended`, on degradation, or by choice. You open the reviewer yourself and hand it the
+doc's **canonical absolute path**. That rendezvous requirement is provider-independent — a
+relative path breaks when the reviewer's session opens in a different checkout.
+
+- **Codex/GPT** — install the bundled skill at `.agents/skills/dual-review/` in your repo and
+  run Codex from the repo root, then give it the absolute doc path.
+- **Claude (Fable 5)** — open a second Claude Code session, and paste the output of
+  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer fable`. It carries an explicit
+  instruction to read the bundled protocol before editing, so no skill install is needed.
+- **Gemini** — paste the output of
+  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
+  write access to the repo. Same protocol, same human gate.
+
+  > **Verified end to end — with one required setting.** A full review was driven through a
+  > real `gemini` CLI (v0.51.0): it read the doc, wrote three findings, flipped the marker, and
+  > passed reviewer-identity verification. Two prerequisites, neither of which this tool sets
+  > for you:
+  >
+  > 1. **`.gemini/settings.json` must disable gitignore filtering** for review docs that are
+  >    gitignored — which includes **all PR-mode scratch files** (`.dual-agent/reviews/…`) and,
+  >    in some repos, `docs/specs`/`docs/plans`. Without it Gemini refuses to read the doc at
+  >    all (*"is ignored by configured ignore patterns"*):
+  >
+  >    ```json
+  >    { "context": { "fileFiltering": { "respectGitIgnore": false } } }
+  >    ```
+  >
+  > 2. **The workspace must be trusted.** Outside a trusted folder the CLI exits 55. Trust it
+  >    interactively or set `GEMINI_CLI_TRUST_WORKSPACE=true`. This tool deliberately does
+  >    **not** pass `--skip-trust` for you — trusted folders guard against repo content driving
+  >    the agent, and disabling that is your call.
+  >
+  > Also worth knowing: export `GEMINI_API_KEY` (a key in `~/.gemini/.env` was not picked up for
+  > `gemini -p` in our testing), and note the free tier allows only a handful of requests per day
+  > — a multi-round review will exhaust it. Failure is clean throughout: doc untouched, marker
+  > not flipped, and the autonomous route degrades to the manual flow with the reason stated.
+
+**Write access is a trust contract, not a sandbox.** Any reviewer needs write access to the
+doc to append findings and flip the marker. The "read only that document" scope limit is
+carried in the prompt and relies on the reviewer honouring it — it is not enforced by a
+sandbox. This is the same trade-off the Codex `--write` route has always made.
+
+**Dependencies.** `codex` and `gemini` are optional external CLIs, each with its own auth and
+billing. `fable` adds none. The manual route works with any of them.
+
 ## Layout
 
 - `docs/dual-agent-review.md` — the protocol contract
 - `commands/dual-review.md` — the `/dual-review` author-mode command
-- `commands/dual-review-auto.md` — the `/dual-review-auto` autonomous command
+- `commands/dual-review-auto.md` — `/dual-review-auto`, a deprecated alias for `/dual-review`
 - `.claude-plugin/plugin.json` — the Claude Code plugin manifest
 - `.agents/skills/dual-review/` — the self-contained `/dual-review` Codex/GPT reviewer skill
   (bundled copies of the protocol doc + reviewer scripts; not installed by the plugin — see
@@ -95,13 +144,21 @@ here; the autonomous route surfaces it at the human gate automatically.
 - `scripts/dual-agent-wait.sh` — lock-free bounded marker wait (reviewer-side resume)
 - `scripts/dual-agent-pr.sh` — PR-URL mode: ingest a GitHub PR into a local scratch file, then publish the converged review
 - `scripts/dual-agent-peer.sh` — symmetric peer-review grammar (mode detect, open-findings, convergence) for PR-mode docs
-- `scripts/dual-agent-codex-prompt.sh` — optional: emits the `/codex:rescue` reviewer prompt for the Codex-plugin route
+- `scripts/dual-agent-reviewer.sh` — the reviewer **provider registry**: which provider is
+  selected (`resolve`), whether it's dispatchable (`check`), its reviewer prompt (`prompt`) and
+  shell dispatch command (`command`), the same-vendor independence notice (`notice`), and
+  post-turn reviewer-identity verification (`verify-vendor`)
 - `scripts/dual-agent-auto-step.sh` — per-round verdict (continue/terminal/stop) for the autonomous loop
 - `scripts/dual-agent-build-reviewer-bundle.sh` — regenerates the bundled reviewer skill from the canonical sources
 - `scripts/dual-agent-history-check.sh` — scans the full git history for internal/sensitive terms; the pre-publish safety gate (see `PUBLISHING.md`)
 - `PUBLISHING.md` — how to take a fork/clone of this repo public safely (fresh-history export or history scrub)
 
-## Usage (file-coordination)
+## Usage (attended, two-session file-coordination)
+
+> **The unattended route is the default** — see "Autonomous review" below. This section
+> documents the **attended** flow: the manual, two-session handoff you get via `--attended`,
+> or when the unattended route degrades. The mechanics below (marker, watcher, absolute-path
+> rendezvous, worktree notes) are shared by both routes.
 
 > **Paths in the examples below** (`scripts/…`, `docs/specs/…`) assume you have this repo
 > cloned. Installed as a **plugin**, you don't run the scripts yourself — the `/dual-review`
@@ -110,7 +167,7 @@ here; the autonomous route surfaces it at the human gate automatically.
 
 In your Claude session:
 
-    /dual-review docs/specs/2026-06-09-my-feature.md
+    /dual-review docs/specs/2026-06-09-my-feature.md --attended
 
 Claude arms author mode (inserts the status marker, starts a watcher) and waits. In a second
 Codex/GPT session rooted in **your** repo (with the reviewer skill installed per **Reviewer
@@ -163,10 +220,18 @@ to the PR.
 
 ## Optional: drive the reviewer via the Codex plugin
 
-By default the reviewer is a **separate Codex/GPT session** you open yourself (the two-session
-flow above). If you have OpenAI's [`codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)
-installed in Claude Code — with the local Codex CLI authenticated — you can instead **summon the
-reviewer from the author's machine**, skipping the second session and the window-switching.
+The **autonomous route is the default** (see "Autonomous review" below): `/dual-review` already
+dispatches the reviewer for you in one unattended session, and for the `codex` provider it does
+so via this same Codex-plugin transport under the hood. The two-session manual flow above is
+what you get on degradation (the selected provider isn't available), via `--attended`, or by
+explicit choice.
+
+This section documents that Codex-plugin transport directly, for driving a single reviewer turn
+yourself — e.g. during the attended flow, or outside the unattended loop — without opening a
+second Codex/GPT session. It requires OpenAI's
+[`codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) installed in Claude Code, with
+the local Codex CLI authenticated; it lets you **summon the reviewer from the author's machine**,
+skipping the second session and the window-switching.
 
 This changes only *how the reviewer is invoked*, never *what the review is*. Codex runs its own
 `/dual-review` reviewer skill in its **own context** — so reviewer independence (a different
@@ -186,7 +251,11 @@ From the armed author session, get the canonical reviewer prompt and hand it to 
 (the author runs this in its plugin context, where `${CLAUDE_PLUGIN_ROOT}` is set; from a plain
 clone, use the bare `scripts/…` path instead):
 
-    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-codex-prompt.sh docs/specs/2026-06-09-my-feature.md
+    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh prompt docs/specs/2026-06-09-my-feature.md
+
+> **Migration:** `dual-agent-codex-prompt.sh` was removed in favour of
+> `dual-agent-reviewer.sh prompt <doc>`, which emits the same prompt for Codex and a
+> provider-appropriate one for `fable`/`gemini`.
 
 Paste the output into the plugin as a background reviewer turn (`--wait` blocks until Codex is
 done, so the author wakes on the hand-back):
@@ -206,30 +275,40 @@ Codex at its own skill, which detects asymmetric vs peer-review mode, so it neve
 **Trade-offs.** This folds an externally-versioned dependency (the plugin + Codex CLI + model
 drift) into a flow the core deliberately keeps self-contained and offline, and Codex invocations
 count against your Codex usage/billing. It is a convenience layer, not a replacement — the manual
-second-session route stays the default and remains fully supported.
+second-session route remains fully supported for attended review.
 
-## Autonomous review (`/dual-review-auto`)
+## Autonomous review (`/dual-review`, unattended by default)
 
-With the Codex plugin installed (see above), `/dual-review-auto <doc-or-PR>` runs the **entire
-review loop unattended in one session** — Claude takes the author turns and summons Codex for
-each reviewer turn — until the marker reaches `converged`/`exhausted`, then stops at the **human
-gate** (and, in PR mode, the human-gated publish). It covers both asymmetric and peer-review
-modes.
+`/dual-review <doc-or-PR>` runs the **entire review loop unattended in one session** by
+default — Claude takes the author turns and dispatches the reviewer for each reviewer turn —
+until the marker reaches `converged`/`exhausted`, then stops at the **human gate** (and, in PR
+mode, the human-gated publish). It covers both asymmetric and peer-review modes. Pass
+`--attended` to fall back to the manual, two-session handoff instead.
 
-    /dual-review-auto docs/specs/2026-06-09-my-feature.md
+    /dual-review docs/specs/2026-06-09-my-feature.md
 
-Each reviewer turn is dispatched with **`--model gpt-5.5`** so the reviewer is a real, consistent
-GPT model (the `codex:codex-rescue` agent is a Claude `sonnet` wrapper; pinning the model keeps an
-unset turn from running as the wrapper). To use a different model, change the `--model` value in
-`commands/dual-review-auto.md` §3.
+The reviewer provider is selected with `DUAL_AGENT_REVIEWER` (`codex`, `fable`, or `gemini`;
+defaults to `codex`) or a per-invocation `--reviewer <id>` flag. For `gemini`,
+`DUAL_AGENT_REVIEWER_MODEL` pins the model; for `codex`, each turn is dispatched with
+`--model gpt-5.5` so the reviewer is a real, consistent GPT model rather than the
+`codex:codex-rescue` agent's Claude `sonnet` wrapper falling through unset.
 
-Safety: any non-conformant turn (Codex didn't flip the marker, an illegal marker transition, a
-malformed doc, or a dispatch failure) **stops the loop and surfaces** — no retry, no faked
-progress (enforced by `scripts/dual-agent-auto-step.sh`). Nothing auto-merges or auto-posts.
+If the chosen provider isn't available (e.g. the Codex CLI isn't installed or authenticated),
+the command announces the reason and degrades to the attended, manual-handoff flow rather than
+failing silently.
 
-Independence note: Claude decides when to summon Codex and with what prompt, so this narrows
-independence of *control* (Codex still runs its own skill in its own context). For a maximally
-adversarial second opinion, the manual `/dual-review` route remains and stays the default.
+`/dual-review-auto` is now a **deprecated alias** for `/dual-review` — it forwards to the same
+command and behavior described here.
+
+Safety: any non-conformant turn (the reviewer didn't flip the marker, an illegal marker
+transition, a malformed doc, or a dispatch failure) **stops the loop and surfaces** — no retry,
+no faked progress (enforced by `scripts/dual-agent-auto-step.sh`). Nothing auto-merges or
+auto-posts.
+
+Independence note: Claude decides when to summon the reviewer and with what prompt, so this
+narrows independence of *control* (the reviewer still runs its own skill in its own context).
+For a maximally adversarial second opinion, the attended (`--attended`) route remains fully
+supported.
 
 ## Tests
 

@@ -46,4 +46,102 @@ case "$verdict" in
 esac
 rm -rf "$tmpcwd" "$D2"
 
+# --- route resolution is documented in the author command (spec §3) ---
+DR="${ROOT}/commands/dual-review.md"
+if [[ -f "$DR" ]]; then
+  grep -q 'dual-agent-reviewer.sh' "$DR" && ok "dual-review.md uses the reviewer registry" \
+    || bad "dual-review.md does not reference dual-agent-reviewer.sh"
+  grep -qi 'attended' "$DR" && ok "dual-review.md documents the --attended escape hatch" \
+    || bad "dual-review.md lacks --attended"
+  grep -qiE 'degrad|falling back' "$DR" && ok "dual-review.md documents announced degradation" \
+    || bad "dual-review.md lacks the degradation path"
+  grep -qi 'DUAL_AGENT_REVIEWER=fable' "$DR" && ok "degradation message points at the zero-dep provider" \
+    || bad "degradation message does not mention DUAL_AGENT_REVIEWER=fable"
+fi
+
+# --- §2's awaiting-reviewer branch defers to route resolution before arming (seam regression) ---
+if [[ -f "$DR" ]]; then
+  awaiting_reviewer_block="$(awk '/\*\*`awaiting-reviewer`\*\* → resolve the doc.s canonical/{flag=1} flag{print} flag && /Then arm|carry out the arm-the-watcher/{exit}' "$DR")"
+  echo "$awaiting_reviewer_block" | grep -q 'Go to §2\.5' \
+    && ok "§2 awaiting-reviewer branch defers to §2.5 before arming" \
+    || bad "§2 awaiting-reviewer branch does not defer to §2.5 before arming"
+fi
+
+# --- Finding 1: --reviewer/--attended are actually PARSED, not just documented ---
+if [[ -f "$DR" ]]; then
+  sec1="$(awk '/^## 1\. Resolve the argument/{flag=1} flag{print} flag && /^## 2\. Arm/{exit}' "$DR")"
+  if echo "$sec1" | grep -q -- '--reviewer <id>' && echo "$sec1" | grep -q -- '--attended'; then
+    ok "§1 splits --reviewer/--attended out of \$ARGUMENTS"
+  else
+    bad "§1 does not document splitting --reviewer/--attended out of \$ARGUMENTS"
+  fi
+  # PR classification must run on the extracted positional, never the raw $ARGUMENTS (a
+  # trailing --reviewer/--attended must not corrupt PR-ref matching).
+  echo "$sec1" | grep -qF 'dual-agent-pr.sh parse "<positional>"' \
+    && ok "PR classification runs on the positional, not raw \$ARGUMENTS" \
+    || bad "PR classification does not run on <positional>"
+  grep -qF 'dual-agent-pr.sh parse "$ARGUMENTS"' "$DR" \
+    && bad "PR classification still runs on the raw \$ARGUMENTS" \
+    || ok "no PR classification call runs on the raw \$ARGUMENTS"
+
+  # §2.5 must forward the extracted --reviewer flag to `resolve` (joined across line wraps —
+  # this is prose, not a shell command, so the flag and the call may wrap onto separate lines).
+  sec25="$(awk '/^## 2\.5 Resolve the route/{flag=1} flag{print} flag && /^## 3\. On each wake/{exit}' "$DR")"
+  echo "$sec25" | tr '\n' ' ' | grep -qE 'reviewer\.sh resolve`, appending[^.]*--reviewer' \
+    && ok "§2.5 forwards --reviewer to resolve" \
+    || bad "§2.5 does not forward --reviewer to resolve"
+fi
+
+# --- the unattended loop verifies reviewer identity BEFORE validating transitions ---
+if [[ -f "$DR" ]]; then
+  grep -q 'verify-vendor' "$DR" && ok "dual-review.md runs verify-vendor" \
+    || bad "dual-review.md never runs verify-vendor"
+  grep -q -- '--baseline' "$DR" && ok "dual-review.md passes a baseline snapshot" \
+    || bad "dual-review.md does not pass --baseline"
+  # verify-vendor must appear BEFORE auto-step in the dispatch section.
+  # Match the actual INVOCATIONS (they carry the "<doc>" argument), not prose mentions —
+  # §3.5 opens with "Repeat until `dual-agent-auto-step.sh` returns …", which would
+  # otherwise be picked up as the first occurrence and invert the comparison.
+  vv="$(grep -nF 'verify-vendor --baseline' "$DR" | head -1 | cut -d: -f1)"
+  as="$(grep -nF 'dual-agent-auto-step.sh "<doc>"' "$DR" | head -1 | cut -d: -f1)"
+  if [[ -n "$vv" && -n "$as" && "$vv" -lt "$as" ]]; then
+    ok "identity check is ordered before auto-step"
+  else
+    bad "verify-vendor must precede auto-step (vv=$vv auto-step=$as)"
+  fi
+  grep -q 'dual-agent-reviewer.sh notice' "$DR" && ok "the human gate prints the independence notice" \
+    || bad "notice is not printed at the human gate"
+  # the provider is resolved ONCE (§2.5) and carried; the loop must not re-resolve
+  grep -qi 'resolved once in' "$DR" && ok "the loop reuses the provider resolved in §2.5" \
+    || bad "dual-review.md does not state the provider is resolved once and carried"
+  [[ "$(grep -cF 'dual-agent-reviewer.sh resolve' "$DR")" -eq 1 ]] \
+    && ok "resolve is invoked exactly once in the command" \
+    || bad "resolve appears more than once — the loop may re-resolve mid-run"
+fi
+
+# --- the baseline snapshot is taken inside §3.5, immediately before reviewer dispatch (Finding 2) ---
+if [[ -f "$DR" ]]; then
+  h35="$(grep -nF '## 3.5 The unattended loop' "$DR" | head -1 | cut -d: -f1)"
+  h4="$(grep -nF '## 4. Terminal' "$DR" | head -1 | cut -d: -f1)"
+  cp_line="$(grep -nF 'cp "<doc>" "<doc>.baseline"' "$DR" | head -1 | cut -d: -f1)"
+  dispatch_line="$(grep -nF 'c. Branch on `kind`:' "$DR" | head -1 | cut -d: -f1)"
+  if [[ -n "$h35" && -n "$h4" && -n "$cp_line" && -n "$dispatch_line" \
+        && "$cp_line" -gt "$h35" && "$cp_line" -lt "$h4" && "$cp_line" -lt "$dispatch_line" ]]; then
+    ok "baseline snapshot is taken inside §3.5, before reviewer dispatch"
+  else
+    bad "baseline snapshot ordering wrong (h3.5=$h35 h4=$h4 cp=$cp_line dispatch=$dispatch_line)"
+  fi
+fi
+
+# --- /dual-review-auto is a deprecated alias, not a second implementation ---
+DA="${ROOT}/commands/dual-review-auto.md"
+if [[ -f "$DA" ]]; then
+  grep -qi 'deprecated' "$DA" && ok "dual-review-auto.md is marked deprecated" \
+    || bad "dual-review-auto.md is not marked deprecated"
+  [[ "$(wc -l < "$DA")" -lt 30 ]] && ok "dual-review-auto.md is a thin alias" \
+    || bad "dual-review-auto.md still carries a full duplicate implementation"
+  grep -q 'dual-review.md' "$DA" && ok "dual-review-auto.md defers to dual-review.md" \
+    || bad "dual-review-auto.md does not defer to dual-review.md"
+fi
+
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]

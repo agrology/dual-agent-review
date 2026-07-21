@@ -313,9 +313,9 @@ This repo carries the author-mode command at `commands/dual-review.md`, invoked 
 `/dual-review [doc]`. Slash-command registries are indexed at session start, so the command
 can be missing from yours even though it exists — if `/dual-review` is reported unknown, do
 NOT conclude the command doesn't exist: read `commands/dual-review.md` and follow
-it directly. An autonomous variant lives at `commands/dual-review-auto.md`, invoked as
-`/dual-review-auto [doc|PR]`; the same 'command may be missing from your registry — read the
-file directly' caveat applies.
+it directly. `/dual-review` is autonomous by default; `commands/dual-review-auto.md`, invoked as
+`/dual-review-auto [doc|PR]`, is now a deprecated alias for it. The same 'command may be missing
+from your registry — read the file directly' caveat applies.
 
 ### Dual-agent review (reviewer role)
 

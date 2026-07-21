@@ -1,16 +1,29 @@
 ---
 description: Author-mode dual-agent review — watch a spec/plan doc and converge with an external reviewer, ending at a human gate.
-argument-hint: "[doc-path | PR-URL]"
+argument-hint: "[doc-path | PR-URL] [--reviewer <id>] [--attended]"
 ---
 
 You are the **author** in a dual-agent review. Drive it with the repo's shell helpers; you
 own prose edits, the helpers own the marker. Never advance past the human gate.
 
-## 0. Classify the argument (doc path vs. PR)
+## 1. Resolve the argument
 
-Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "$ARGUMENTS"`.
+**Split first.** `$ARGUMENTS` may carry `--reviewer <id>` and/or `--attended` in addition to
+the doc path or PR ref, in any order, before or after the positional. Extract them:
 
-- **Exit non-zero** (not a PR ref) → this is a local doc. Continue at §1 unchanged.
+- `--reviewer <id>` — per-invocation reviewer override, consumed in §2.5.
+- `--attended` — selects the attended route directly, consumed in §2.5.
+
+Everything else is `<positional>` (empty if `$ARGUMENTS` was flags only, or absent entirely).
+Classification and doc resolution below use `<positional>` only — never the raw
+`$ARGUMENTS` — so a trailing `--reviewer <id>` can never corrupt PR-ref matching or become
+part of a doc path.
+
+### Classify (doc path vs. PR)
+
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "<positional>"`.
+
+- **Exit non-zero** (not a PR ref) → this is a local doc. Continue at "Resolve the doc" below.
 - **Exit 0** → it printed `owner|repo|number` (owner/repo empty for the bare `#n` form). This
   is **PR mode**:
   1. If owner/repo are empty, fill them: `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh resolve-repo` →
@@ -37,9 +50,9 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "$ARGUMENTS"`.
      `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-peer.sh mode "<doc>"` → `peer-review`); §3 uses the symmetric
      turn for them.
 
-## 1. Resolve the doc (deterministic)
+### Resolve the doc (local, deterministic)
 
-- If `$ARGUMENTS` is non-empty, that path is the doc.
+- If `<positional>` is non-empty, that path is the doc.
 - Else: list `.md` files **directly under** each dir in `DUAL_AGENT_DOC_DIRS`
   (default `docs/specs docs/plans`) whose names match `YYYY-MM-DD-…`. Pick the greatest by
   **date prefix, then filename** (NOT mtime). If there are zero candidates, or the top two
@@ -57,11 +70,21 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "$ARGUMENTS"`.
     (`"$(cd "$(dirname "<doc>")" && pwd -P)/$(basename "<doc>")"`) and tell the engineer:
     "author mode armed on `<abs-path>` — give your reviewer exactly this path." The
     absolute path is the rendezvous: a relative path breaks when the reviewer's session
-    opens in a different checkout (worktree siblings carry same-named docs). Then arm the
-    watcher (below) and wait.
-  - **anything else** (`awaiting-author`, `converged`, `exhausted`) → it is already your move:
-    handle it NOW via §3. Do NOT arm a watcher first — waiting on a doc the reviewer will
-    never edit again deadlocks the loop.
+    opens in a different checkout (worktree siblings carry same-named docs).
+    - **Route not yet resolved this run** (the first time §2 is reached this invocation) →
+      **STOP — do NOT arm yet.** Go to §2.5 first to resolve the route. Only carry out the arm-the-watcher
+      steps below (arm, then verify) if §2.5's attended state sends you back here; the default
+      unattended route (§3.5) never reaches this arming step at all.
+    - **Route already resolved this run** (this is a re-arm requested by §3, already
+      committed to the attended route for this invocation) → carry out the arm-the-watcher
+      steps below directly; do not revisit §2.5 or re-resolve — that would contradict
+      "resolve once, carry it through" (§2.5).
+  - **`awaiting-author`** → it is already your move: handle it NOW via §3. Do NOT arm a
+    watcher first — waiting on a doc the reviewer will never edit again deadlocks the loop.
+  - **`converged` / `exhausted`** → it is already terminal: handle it NOW via §4 (which
+    branches exactly as §3's `converged`/`exhausted` bullets, and also prints the
+    independence notice — a resume that lands directly on a terminal state must not skip it).
+    Do NOT arm a watcher first.
 - To arm (**arm, then verify — always in this order**): pick a random token (e.g.
   `dar-$RANDOM$RANDOM`). Launch the watcher as a **background Bash task**:
   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-watch.sh "<doc>" "<token>"`. Then, BEFORE stopping your turn,
@@ -69,7 +92,50 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "$ARGUMENTS"`.
   baseline are invisible to it, so a reviewer hand-back that arrived while you were
   processing would otherwise never wake you. If the re-read still says
   `awaiting-reviewer`, stop your turn and wait to be re-woken when the task exits.
-  Otherwise stop the watcher task and handle the new state via §3 NOW.
+  Otherwise stop the watcher task and handle the new state NOW: `awaiting-author` via §3;
+  `converged`/`exhausted` via §4, so the independence notice is printed on this path too.
+
+## 2.5 Resolve the route (autonomous by default)
+
+**Step 1 runs on every path.** Both routes need the resolved row — the attended state passes its
+`id` to `prompt` — so resolve first, then branch:
+
+1. Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh resolve`, appending
+   `--reviewer <flag-id>` when §1 extracted a `--reviewer` flag (omit the flag entirely
+   otherwise, so the env var/default applies) → `id|vendor|kind|model|has-skill`. A non-zero
+   exit means an unknown provider — report it and STOP.
+2. **If §1 extracted `--attended`**, skip the check and go straight to the attended state
+   below, carrying the row from step 1. Otherwise this command drives the review
+   **unattended**: run
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh check --reviewer <id>` (the row's
+   resolved `id` from step 1, not the raw flag).
+   - **exit 0** → run the unattended loop in §3.5.
+   - **non-zero** → announce the reason verbatim, then degrade to the attended state below.
+     Never degrade silently.
+
+**Degradation message** (print the `check` reason, then this):
+
+    <reason> — falling back to manual handoff. For zero-dependency autonomous review, set
+    DUAL_AGENT_REVIEWER=fable (same-vendor; see independence tiers in the README).
+
+**Attended state** (also what the `--attended` flag extracted in §1 selects directly): emit
+the reviewer prompt with
+`${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh prompt "<doc>" --reviewer <id>` (the
+row's resolved `id` from step 1), print the canonical absolute doc path, then **return to
+§2's `awaiting-reviewer` branch and carry out its arm-the-watcher steps now** — that is the
+deliberate hand-back §2's deferral sent you here to receive, not a fresh path to improvise.
+This is the pre-existing `/dual-review` behavior, with the prompt already prepared for the
+chosen provider. There is no second fallback tier.
+
+The **provider never changes on its own** — only the route degrades. If the engineer wants a
+different reviewer they set `DUAL_AGENT_REVIEWER` or pass `--reviewer` (§1); the tool will not
+silently substitute one.
+
+**Resolve once, carry it through.** The row produced by step 1 is fixed for the entire run —
+§3.5 reuses it and never re-resolves. Provider selection is therefore read exactly once, at a
+point where the choice is announced, rather than re-read each round where a mutable env var
+could swap reviewers mid-review without anyone noticing. Switching provider means ending the
+run and re-invoking the command.
 
 ## 3. On each wake — branch on the marker ONLY
 
@@ -114,6 +180,82 @@ Read it with `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh marker "<doc>"`:
   annotated review to the PR (the summary makes the still-open concerns explicit); only on
   explicit approval, run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh publish "<doc>" "<your-model-id>"`
   (one neutral `--comment` review). Do NOT relaunch the watcher. STOP.
+
+## 3.5 The unattended loop
+
+Repeat until `dual-agent-auto-step.sh` returns `terminal` or `stop`:
+
+1. Record `prev_state`/`prev_round` from `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh marker "<doc>"`.
+2. **`awaiting-author`** → take the author turn exactly as §3 prescribes for the doc's mode,
+   stopping before its `next-marker` and re-arm steps (§3's `awaiting-author` branch ends with
+   both; skip them there — running `next-marker` twice dies loudly, and re-arming a watcher
+   inside this loop would stall it), then here run
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh next-marker "<doc>" author-done`.
+3. **`awaiting-reviewer`** → dispatch one reviewer turn:
+   a. **Snapshot first:** `cp "<doc>" "<doc>.baseline"`. This must happen *immediately* before
+      dispatch — it is what scopes the identity check to this turn alone.
+   b. Use the `id|vendor|kind|model|has-skill` row **resolved once in §2.5**. Do **not** call
+      `resolve` again inside the loop: re-resolving each round would make the active reviewer
+      depend on mutable environment state, so an env change mid-run could silently swap
+      providers between rounds — the exact silent substitution §2.5 forbids. It would also
+      desynchronise `verify-vendor`, which judges a turn against "the resolved provider".
+      A deliberate provider change is made by ending this run and re-invoking the command,
+      which re-resolves at §2.5 and states the choice; it is never a mid-loop mutation.
+   c. Branch on `kind`:
+      - **`subagent`** → dispatch the Agent tool with the resolved `model`, passing the output
+        of `dual-agent-reviewer.sh prompt "<doc>" --reviewer <id>` as the task text. For
+        `codex` use the `codex:codex-rescue` agent with `--model <model> --write`; for `fable`
+        use `general-purpose` with `model: fable`. The `--model`/`--write` flags are runtime
+        controls, stripped from the task text — never part of the payload.
+      - **`shell`** → read NUL-delimited argv and execute it without a shell round-trip:
+
+            argv=()
+            while IFS= read -r -d '' a; do argv+=("$a"); done \
+              < <("${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh" command "<doc>" --reviewer <id>)
+            "${argv[@]}"
+
+        Use this exact loop, not `mapfile` — macOS ships bash 3.2, which has no `mapfile`.
+   d. **Verify identity BEFORE validating transitions:**
+      `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh verify-vendor --baseline "<doc>.baseline" "<doc>" --reviewer <id>`.
+      Non-zero → **anomaly stop**: the model that ran was not the one selected, so the round's
+      output cannot be trusted. Remove the snapshot (`rm -f "<doc>.baseline"`) — it has served
+      its purpose and STOP is exiting the loop — then surface it and STOP. Do not retry, do not
+      re-dispatch.
+   e. Remove the snapshot: `rm -f "<doc>.baseline"`.
+4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-auto-step.sh "<doc>" "<prev_state>" "<prev_round>"`:
+   `continue` (0) → loop; `terminal` (10) → §4; `stop` (20) → an **anomaly stop** — surface
+   `auto-step`'s `stop <reason>` and the partial round trail to the engineer, same as 3.d
+   above (including the same snapshot cleanup, if one is still present). Do not retry, do not
+   re-dispatch, do not edit the marker.
+
+A **dispatch failure** (the agent/CLI could not be invoked at all) is a *degradation trigger*,
+not an anomaly stop: remove the snapshot taken in step a (`rm -f "<doc>.baseline"` — there was
+no turn for it to scope), announce the failure, and drop to the attended state from §2.5.
+Anomaly stops are reserved for a turn that ran but cannot be trusted — an identity mismatch —
+or for protocol violations detected by `auto-step`.
+
+An **anomaly stop is not a human gate** and does not run §4: the marker is neither `converged`
+nor `exhausted`, so do not print the independence notice — a vendor-identity claim would be
+misleading for a turn whose identity is exactly what's in question. Surface the raw reason and
+the partial round trail instead.
+
+## 4. Terminal — human gate
+
+Branch on the marker exactly as §3's `converged` and `exhausted` branches prescribe — same
+convergence checks (`core.sh check-converged` for `asymmetric`, `peer.sh check-converged` for
+`peer-review`), same presentation, and same PR-mode publish offer (`dual-agent-pr.sh publish`,
+gated on explicit engineer approval, for both `converged` and `exhausted`). §4 adds nothing to
+that branching; it only adds the notice below, printed in **both** terminal states. In both
+cases, before handing back to the engineer, print the independence notice beside the round
+summary:
+
+    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh notice "<your-model-id>" --reviewer <id>
+
+It prints one line when author and reviewer share a vendor, an explicit *unverified* line if
+the author id cannot be mapped, and nothing when they are genuinely cross-vendor — so silence
+means "checked and cross-vendor", never "not checked".
+
+STOP at the gate. Never implement, commit, or open a PR from this command.
 
 ## Guardrails
 

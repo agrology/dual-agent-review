@@ -73,8 +73,14 @@ resolve_id() { # [--reviewer <id>] -> the selected provider id
 }
 
 resolve_row() { # [--reviewer <id>] -> the full row, or die 2
-  local id row
-  id="$(resolve_id "$@")"
+  local id rc row
+  id="$(resolve_id "$@")"; rc=$?
+  # resolve_id runs inside this command substitution's own subshell, so a `die` inside it
+  # (e.g. "--reviewer requires a value") exits only that subshell — it does NOT stop this
+  # function. Left unchecked, execution falls through with id="" and provider_row emits a
+  # second, contradictory "unknown reviewer provider: " (empty) on top of the real reason.
+  # Propagate the real failure instead of layering a misleading one over it.
+  [[ $rc -eq 0 ]] || exit "$rc"
   row="$(provider_row "$id")" \
     || die "unknown reviewer provider: ${id} (known: codex fable gemini)" 2
   echo "$row"
@@ -95,6 +101,8 @@ cmd_check() { # [--reviewer <id>] -> 0 dispatchable, 1 with reason
     gemini)
       command -v gemini >/dev/null 2>&1 \
         || die "gemini CLI not on PATH" 1 ;;
+    *)
+      die "no availability check defined for reviewer provider '${id}'" 2 ;;
   esac
   return 0
 }
@@ -192,6 +200,8 @@ cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
       # its findings as prose and never touched the doc, leaving the marker unflipped. Chosen
       # over `yolo` deliberately — `auto_edit` approves edit tools only, never shell.
       printf '%s\0' "gemini" "-m" "$model" "--approval-mode" "auto_edit" "-p" "$prompt" ;;
+    *)
+      die "no shell command defined for reviewer provider '${id}'" 2 ;;
   esac
 }
 
