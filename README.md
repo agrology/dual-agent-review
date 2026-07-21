@@ -18,7 +18,7 @@ As a Claude Code plugin:
 This installs the `/dual-review` and `/dual-review-auto` slash commands and their supporting
 scripts. It does **not** install the reviewer side — see "Reviewer setup" below.
 
-## Reviewer setup (BYO-Codex)
+## Reviewer setup (BYO reviewer)
 
 The reviewer agent is a separate tool you bring yourself; it does **not** appear automatically
 on plugin install. You need:
@@ -56,6 +56,29 @@ reviewer (`fable`) gives fresh context and different weights, but shares a train
 with the Claude author — real value, weaker claim. `dual-agent-reviewer.sh notice` reports a
 same-vendor pairing so the distinction is visible when you are deciding rather than buried
 here; the autonomous route surfaces it at the human gate automatically.
+
+### Manual (two-session) route, per provider
+
+The manual route is the dependency-free default: you open the reviewer yourself and hand it
+the doc's **canonical absolute path**. That rendezvous requirement is provider-independent — a
+relative path breaks when the reviewer's session opens in a different checkout.
+
+- **Codex/GPT** — install the bundled skill at `.agents/skills/dual-review/` in your repo and
+  run Codex from the repo root, then give it the absolute doc path.
+- **Claude (Fable 5)** — open a second Claude Code session, and paste the output of
+  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer fable`. It carries an explicit
+  instruction to read the bundled protocol before editing, so no skill install is needed.
+- **Gemini** — paste the output of
+  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
+  write access to the repo. Same protocol, same human gate.
+
+**Write access is a trust contract, not a sandbox.** Any reviewer needs write access to the
+doc to append findings and flip the marker. The "read only that document" scope limit is
+carried in the prompt and relies on the reviewer honouring it — it is not enforced by a
+sandbox. This is the same trade-off the Codex `--write` route has always made.
+
+**Dependencies.** `codex` and `gemini` are optional external CLIs, each with its own auth and
+billing. `fable` adds none. The manual route works with any of them.
 
 ## Layout
 
@@ -142,10 +165,18 @@ to the PR.
 
 ## Optional: drive the reviewer via the Codex plugin
 
-By default the reviewer is a **separate Codex/GPT session** you open yourself (the two-session
-flow above). If you have OpenAI's [`codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)
-installed in Claude Code — with the local Codex CLI authenticated — you can instead **summon the
-reviewer from the author's machine**, skipping the second session and the window-switching.
+The **autonomous route is the default** (see "Autonomous review" below): `/dual-review` already
+dispatches the reviewer for you in one unattended session, and for the `codex` provider it does
+so via this same Codex-plugin transport under the hood. The two-session manual flow above is
+what you get on degradation (the selected provider isn't available), via `--attended`, or by
+explicit choice.
+
+This section documents that Codex-plugin transport directly, for driving a single reviewer turn
+yourself — e.g. during the attended flow, or outside the unattended loop — without opening a
+second Codex/GPT session. It requires OpenAI's
+[`codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) installed in Claude Code, with
+the local Codex CLI authenticated; it lets you **summon the reviewer from the author's machine**,
+skipping the second session and the window-switching.
 
 This changes only *how the reviewer is invoked*, never *what the review is*. Codex runs its own
 `/dual-review` reviewer skill in its **own context** — so reviewer independence (a different
@@ -189,7 +220,7 @@ Codex at its own skill, which detects asymmetric vs peer-review mode, so it neve
 **Trade-offs.** This folds an externally-versioned dependency (the plugin + Codex CLI + model
 drift) into a flow the core deliberately keeps self-contained and offline, and Codex invocations
 count against your Codex usage/billing. It is a convenience layer, not a replacement — the manual
-second-session route stays the default and remains fully supported.
+second-session route remains fully supported for attended review.
 
 ## Autonomous review (`/dual-review`, unattended by default)
 
