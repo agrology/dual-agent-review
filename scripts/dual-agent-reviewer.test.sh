@@ -190,7 +190,7 @@ first=""; IFS= read -r -d '' first < "${WORK}/argv.bin"
 [[ "$first" == "gemini" ]] && ok "command(gemini) argv[0] is the gemini CLI" || bad "argv[0] was '$first'"
 # the raw stream really is NUL-delimited (guards against a space-joined regression)
 nuls="$(tr -dc '\0' < "${WORK}/argv.bin" | wc -c | tr -d ' ')"
-[[ "$nuls" == "5" ]] && ok "argv stream carries exactly 5 NUL delimiters (gemini -m <model> -p <prompt>)" || bad "NUL count was '$nuls' (want 5)"
+[[ "$nuls" == "7" ]] && ok "argv stream carries exactly 7 NUL delimiters (gemini -m M --approval-mode auto_edit -p P)" || bad "NUL count was '$nuls' (want 7)"
 
 # --- command: NUL round-trip through the BASH 3.2-SAFE consumer, with a spaced path ---
 # --- and a prompt containing newlines and quotes. Run under /bin/bash (3.2 on macOS) so a ---
@@ -208,7 +208,7 @@ i=0; for a in "${argv[@]}"; do i=$((i+1)); printf 'ARG%s<%s>\n' "$i" "$a"; done
 CONSUMER
 rt="$(/bin/bash "${WORK}/consume.sh" "$SUT" "$DS" 2>/dev/null)"; rc=$?
 [[ "$rc" == 0 ]] && ok "NUL argv round-trip runs under /bin/bash (3.2-safe)" || bad "3.2 consumer rc=$rc"
-grep -q '^count=5$' <<<"$rt" && ok "round-trip yields exactly 5 argv elements" || bad "argv count wrong: $(grep '^count=' <<<"$rt")"
+grep -q '^count=7$' <<<"$rt" && ok "round-trip yields exactly 7 argv elements" || bad "argv count wrong: $(grep '^count=' <<<"$rt")"
 grep -qF "${DS}" <<<"$rt" && ok "spaced doc path survives the round-trip intact" || bad "spaced path mangled in round-trip"
 grep -qF 'Do ONE reviewer turn' <<<"$rt" && ok "multi-line prompt survives as one argv element" || bad "prompt element mangled"
 grep -qF '`> — via <your-model-id>`' <<<"$rt" && ok "quote/backtick characters survive intact" || bad "quote characters mangled"
@@ -224,14 +224,14 @@ bash "$SUT" command "${WORK}/nope.md" --reviewer gemini >/dev/null 2>&1; rc=$?
 DUAL_AGENT_REVIEWER_MODEL=gemini-3-pro bash "$SUT" command "$D" --reviewer gemini > "${WORK}/argv-pinned.bin" 2>/dev/null
 argv_pinned=()
 while IFS= read -r -d '' a; do argv_pinned+=("$a"); done < "${WORK}/argv-pinned.bin"
-[[ ${#argv_pinned[@]} -eq 5 ]] && ok "command(gemini, model-pinned) emits exactly 5 argv elements" \
-  || bad "argv element count was ${#argv_pinned[@]} (want 5)"
+[[ ${#argv_pinned[@]} -eq 7 ]] && ok "command(gemini, model-pinned) emits exactly 7 argv elements" \
+  || bad "argv element count was ${#argv_pinned[@]} (want 7)"
 [[ "${argv_pinned[0]}" == "gemini" ]] && ok "pinned argv[0] is the gemini CLI" || bad "pinned argv[0] was '${argv_pinned[0]}'"
 [[ "${argv_pinned[1]}" == "-m" ]] && ok "pinned argv[1] is -m flag" || bad "pinned argv[1] was '${argv_pinned[1]}'"
 [[ "${argv_pinned[2]}" == "gemini-3-pro" ]] && ok "pinned argv[2] is the model" || bad "pinned argv[2] was '${argv_pinned[2]}'"
 nuls_pinned="$(tr -dc '\0' < "${WORK}/argv-pinned.bin" | wc -c | tr -d ' ')"
-[[ "$nuls_pinned" == "5" ]] && ok "pinned argv stream carries exactly 5 NUL terminators (5 elements)" \
-  || bad "pinned NUL count was '$nuls_pinned' (want 5)"
+[[ "$nuls_pinned" == "7" ]] && ok "pinned argv stream carries exactly 7 NUL terminators (7 elements)" \
+  || bad "pinned NUL count was '$nuls_pinned' (want 7)"
 
 # --- notice: same-vendor pairing warns (author Claude + reviewer Fable) ---
 out="$(bash "$SUT" notice claude-opus-4-8 --reviewer fable 2>/dev/null)"; rc=$?
@@ -412,6 +412,28 @@ bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/
 for id in gemini gemini-3-pro gemini-2.5-flash; do
   out="$(bash "$SUT" notice "$id" --reviewer codex 2>/dev/null)"
   [[ -z "$out" ]] && ok "vendor mapping: '$id' -> google (silent vs openai reviewer)" \
+    || bad "vendor mapping: '$id' unmapped -> '$out'"
+done
+
+# --- gemini argv must carry an edit-approval flag (the analogue of codex --write) ---
+# Without it, `gemini -p` runs non-interactively with approval mode `default`, i.e. "prompt
+# for approval" — and with nobody to prompt, file-modification tools are disabled. Observed
+# live: the reviewer emitted its findings as TEXT and never touched the doc, so the marker
+# never flipped. auto_edit (not yolo) approves edit tools only, never shell.
+bash "$SUT" command "$D" --reviewer gemini > "${WORK}/argv-approval.bin" 2>/dev/null
+appr=(); while IFS= read -r -d '' a; do appr+=("$a"); done < "${WORK}/argv-approval.bin"
+printf '%s\n' "${appr[@]}" | grep -qx -- '--approval-mode' \
+  && ok "gemini argv carries --approval-mode" || bad "gemini argv lacks --approval-mode"
+printf '%s\n' "${appr[@]}" | grep -qx -- 'auto_edit' \
+  && ok "gemini approval mode is auto_edit (edit tools only, not yolo)" \
+  || bad "gemini approval mode is not auto_edit: ${appr[*]}"
+! printf '%s\n' "${appr[@]}" | grep -qx -- 'yolo' \
+  && ok "gemini argv does NOT use yolo (would auto-approve shell too)" || bad "gemini argv uses yolo"
+
+# --- vendor mapping: bare OpenAI reasoning model ids (codex's own help uses `model="o3"`) ---
+for id in o1 o3 o1-preview o3-mini; do
+  out="$(bash "$SUT" notice "$id" --reviewer gemini 2>/dev/null)"
+  [[ -z "$out" ]] && ok "vendor mapping: '$id' -> openai (silent vs google reviewer)" \
     || bad "vendor mapping: '$id' unmapped -> '$out'"
 done
 

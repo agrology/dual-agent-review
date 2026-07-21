@@ -37,12 +37,17 @@ provider_row() { # <id> -> "id|vendor|dispatch-kind|model|has-skill"
 # Map an arbitrary disclosed model id to a vendor. Used by both `notice` (author side) and
 # `verify-vendor` (reviewer side). Returns 1 when unmappable — callers must treat that as a
 # loud failure, never as a silent pass.
+#
+# Each family accepts the BARE id as well as the versioned one. A CLI that reports a family
+# name with no version suffix is common in practice — Gemini discloses `gemini`, and Codex's
+# own help documents `model="o3"` — and a suffix-only pattern leaves those unmappable, which
+# `verify-vendor` escalates to a hard failure and takes the whole route down.
 vendor_of_model() { # <model-id> -> vendor
   case "$1" in
-    claude-*|*opus*|*sonnet*|*haiku*|*fable*) echo "anthropic" ;;
-    gpt-*|o1-*|o3-*|*codex*)                  echo "openai" ;;
-    gemini|gemini-*)                          echo "google" ;;
-    *)                                        return 1 ;;
+    claude-*|*opus*|*sonnet*|*haiku*|*fable*)     echo "anthropic" ;;
+    gpt|gpt-*|o1|o1-*|o3|o3-*|*codex*)            echo "openai" ;;
+    gemini|gemini-*)                              echo "google" ;;
+    *)                                            return 1 ;;
   esac
 }
 
@@ -180,7 +185,13 @@ cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
     gemini)
       # `model` always carries a value (registry default or the env override), so the model is
       # always explicit — we never fall through to the CLI's own default tier.
-      printf '%s\0' "gemini" "-m" "$model" "-p" "$prompt" ;;
+      #
+      # `--approval-mode auto_edit` is the analogue of the codex route's `--write`. Without it
+      # `gemini -p` runs at approval mode `default` ("prompt for approval") with nobody there
+      # to prompt, so file-modification tools are disabled: observed live, the reviewer emitted
+      # its findings as prose and never touched the doc, leaving the marker unflipped. Chosen
+      # over `yolo` deliberately — `auto_edit` approves edit tools only, never shell.
+      printf '%s\0' "gemini" "-m" "$model" "--approval-mode" "auto_edit" "-p" "$prompt" ;;
   esac
 }
 
