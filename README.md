@@ -15,22 +15,30 @@ As a Claude Code plugin:
 
     /plugin install agrology/dual-agent-review
 
-This installs the `/dual-review` and `/dual-review-auto` slash commands and their supporting
-scripts. It does **not** install the reviewer side — see "Reviewer setup" below.
+This installs the `/dual-review` slash command and its supporting scripts (plus
+`/dual-review-auto`, a **deprecated** alias kept only for muscle memory — `/dual-review` is
+autonomous by default). It does **not** install the reviewer side — see "Reviewer setup"
+below, though note that the `fable` reviewer needs no setup at all.
 
 ## Reviewer setup (BYO reviewer)
 
-The reviewer agent is a separate tool you bring yourself; it does **not** appear automatically
-on plugin install. You need:
+What you need depends on which reviewer you pick — **only `codex` requires setup**:
 
-- the `codex` CLI, authenticated, with a model available to it
-- the self-contained reviewer skill copied into your target repo at
-  `<your-repo>/.agents/skills/dual-review/` — this fixed, repo-root-relative location is what
-  the skill's bundled helper/protocol paths resolve against, so the path must be exact
+| reviewer | setup required |
+|---|---|
+| `fable` | **None.** Runs in-harness as a Claude subagent; no CLI, no skill install, no extra auth. |
+| `gemini` | The `gemini` CLI on PATH and authenticated, plus two settings — see the Gemini notes under "Manual (two-session) route" below. No skill install. |
+| `codex` *(default)* | The `codex` CLI, authenticated, **and** the reviewer skill copied into your repo (below). |
 
-Copy the skill directory from this repo (`.agents/skills/dual-review/`) into your repo at the
-same relative path, then run Codex **from your repo's root** so the bundled paths resolve.
-See "Usage (file-coordination)" below for how the two sides then converge.
+**Codex only** — copy the self-contained reviewer skill from this repo
+(`.agents/skills/dual-review/`) into your target repo at exactly
+`<your-repo>/.agents/skills/dual-review/`. That fixed, repo-root-relative location is what the
+skill's bundled helper/protocol paths resolve against, so the path must match. Then run Codex
+**from your repo's root** so those paths resolve.
+
+`fable` and `gemini` need no skill: the prompt they receive points them at the protocol
+contract directly. See "Usage (attended, two-session file-coordination)" below for how the two
+sides converge once a reviewer is in place.
 
 ### Choosing the reviewer model
 
@@ -133,7 +141,7 @@ billing. `fable` adds none. The manual route works with any of them.
 - `commands/dual-review.md` — the `/dual-review` author-mode command
 - `commands/dual-review-auto.md` — `/dual-review-auto`, a deprecated alias for `/dual-review`
 - `.claude-plugin/plugin.json` — the Claude Code plugin manifest
-- `.agents/skills/dual-review/` — the self-contained `/dual-review` Codex/GPT reviewer skill
+- `.agents/skills/dual-review/` — the self-contained `/dual-review` reviewer skill, needed **only** for the `codex` provider (`fable`/`gemini` are pointed at the protocol by their prompt)
   (bundled copies of the protocol doc + reviewer scripts; not installed by the plugin — see
   "Reviewer setup" above)
 - `CLAUDE.md` / `AGENTS.md` — this repo's own engineering working agreement, including the
@@ -151,6 +159,8 @@ billing. `fable` adds none. The manual route works with any of them.
 - `scripts/dual-agent-auto-step.sh` — per-round verdict (continue/terminal/stop) for the autonomous loop
 - `scripts/dual-agent-build-reviewer-bundle.sh` — regenerates the bundled reviewer skill from the canonical sources
 - `scripts/dual-agent-history-check.sh` — scans the full git history for internal/sensitive terms; the pre-publish safety gate (see `PUBLISHING.md`)
+- `scripts/*.test.sh` — the test suite; one file per script, run by the gate under "Tests" below
+- `scripts/fixtures/codex-prompt.golden.txt` — the byte-identity lock on the Codex reviewer prompt. Captured from the original emitter before it was retired, with the doc path normalised to `@@DOC@@`; it is now the only thing that would catch silent drift in that prompt, so regenerate it deliberately rather than to make a test pass
 - `PUBLISHING.md` — how to take a fork/clone of this repo public safely (fresh-history export or history scrub)
 
 ## Usage (attended, two-session file-coordination)
@@ -169,14 +179,18 @@ In your Claude session:
 
     /dual-review docs/specs/2026-06-09-my-feature.md --attended
 
-Claude arms author mode (inserts the status marker, starts a watcher) and waits. In a second
-Codex/GPT session rooted in **your** repo (with the reviewer skill installed per **Reviewer
-setup** above), run:
+Claude arms author mode (inserts the status marker, starts a watcher) and waits, printing the
+doc's canonical absolute path. Hand that path to your reviewer — **any** of the three works
+here:
 
-    /dual-review docs/specs/2026-06-09-my-feature.md
+- **Codex/GPT** — in a second Codex session rooted in **your** repo (skill installed per
+  **Reviewer setup** above), run `/dual-review <abs-path>`.
+- **Claude (Fable 5)** or **Gemini** — no skill needed; paste the output of
+  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer fable` (or `--reviewer gemini`) into
+  that session. The prompt carries the protocol contract's location and the absolute doc path.
 
-The two converge through the file; Claude stops at a **human approval gate**.
-For non-Codex reviewer agents, `AGENTS.md` still points them at the same protocol.
+The two sides converge through the file; Claude stops at a **human approval gate**. Any other
+agent can play the reviewer too — `AGENTS.md` points it at the same protocol.
 
 - **Config:** `DUAL_AGENT_DOC_DIRS` (default `docs/specs docs/plans`),
   `DUAL_AGENT_MAX_ROUNDS` (default `10`). The dir list is space-separated, so individual
@@ -288,10 +302,10 @@ mode, the human-gated publish). It covers both asymmetric and peer-review modes.
     /dual-review docs/specs/2026-06-09-my-feature.md
 
 The reviewer provider is selected with `DUAL_AGENT_REVIEWER` (`codex`, `fable`, or `gemini`;
-defaults to `codex`) or a per-invocation `--reviewer <id>` flag. For `gemini`,
-`DUAL_AGENT_REVIEWER_MODEL` pins the model; for `codex`, each turn is dispatched with
-`--model gpt-5.5` so the reviewer is a real, consistent GPT model rather than the
-`codex:codex-rescue` agent's Claude `sonnet` wrapper falling through unset.
+defaults to `codex`) or a per-invocation `--reviewer <id>` flag. Each provider's model comes
+from the registry and can be overridden with `DUAL_AGENT_REVIEWER_MODEL` — see "Which model
+each provider runs" above. The `codex` default is non-empty on purpose: an unset model lets
+the `codex:codex-rescue` agent's Claude `sonnet` wrapper answer instead of a GPT model.
 
 If the chosen provider isn't available (e.g. the Codex CLI isn't installed or authenticated),
 the command announces the reason and degrades to the attended, manual-handoff flow rather than
@@ -300,15 +314,27 @@ failing silently.
 `/dual-review-auto` is now a **deprecated alias** for `/dual-review` — it forwards to the same
 command and behavior described here.
 
-Safety: any non-conformant turn (the reviewer didn't flip the marker, an illegal marker
-transition, a malformed doc, or a dispatch failure) **stops the loop and surfaces** — no retry,
-no faked progress (enforced by `scripts/dual-agent-auto-step.sh`). Nothing auto-merges or
-auto-posts.
+Safety — two different failures, handled two different ways, deliberately:
+
+- **A turn that ran but cannot be trusted → the loop stops and surfaces.** No retry, no faked
+  progress. That covers a reviewer that didn't flip the marker, an illegal marker transition,
+  or a malformed doc (all enforced by `scripts/dual-agent-auto-step.sh`), plus a
+  **reviewer-identity mismatch**: after each turn, `dual-agent-reviewer.sh verify-vendor`
+  compares the `> — via` disclosures the turn added against the selected provider's vendor, so
+  a turn taken by a different vendor's model than the one you chose halts the review rather
+  than being silently accepted.
+- **A provider that couldn't be invoked at all → degradation, not a stop.** A dispatch failure
+  (CLI missing, unauthenticated, agent unavailable) announces its reason and drops to the
+  attended, manual-handoff flow, as described above. Nothing ran, so there is nothing to
+  distrust.
+
+Nothing auto-merges or auto-posts in either case.
 
 Independence note: Claude decides when to summon the reviewer and with what prompt, so this
-narrows independence of *control* (the reviewer still runs its own skill in its own context).
-For a maximally adversarial second opinion, the attended (`--attended`) route remains fully
-supported.
+narrows independence of *control* — the reviewer still reasons in its own context, from the
+protocol contract (via its own skill for `codex`, or the protocol file the prompt points
+skill-less providers at). For a maximally adversarial second opinion, the attended
+(`--attended`) route remains fully supported.
 
 ## Tests
 
