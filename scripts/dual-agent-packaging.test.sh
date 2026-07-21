@@ -94,4 +94,18 @@ if [[ -f "$DR" ]]; then
     || bad "resolve appears more than once — the loop may re-resolve mid-run"
 fi
 
+# --- the baseline snapshot is taken inside §3.5, immediately before reviewer dispatch (Finding 2) ---
+if [[ -f "$DR" ]]; then
+  h35="$(grep -nF '## 3.5 The unattended loop' "$DR" | head -1 | cut -d: -f1)"
+  h4="$(grep -nF '## 4. Terminal' "$DR" | head -1 | cut -d: -f1)"
+  cp_line="$(grep -nF 'cp "<doc>" "<doc>.baseline"' "$DR" | head -1 | cut -d: -f1)"
+  dispatch_line="$(grep -nF 'c. Branch on `kind`:' "$DR" | head -1 | cut -d: -f1)"
+  if [[ -n "$h35" && -n "$h4" && -n "$cp_line" && -n "$dispatch_line" \
+        && "$cp_line" -gt "$h35" && "$cp_line" -lt "$h4" && "$cp_line" -lt "$dispatch_line" ]]; then
+    ok "baseline snapshot is taken inside §3.5, before reviewer dispatch"
+  else
+    bad "baseline snapshot ordering wrong (h3.5=$h35 h4=$h4 cp=$cp_line dispatch=$dispatch_line)"
+  fi
+fi
+
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]
