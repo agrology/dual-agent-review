@@ -247,12 +247,18 @@ assert_balanced_fences() { # <file> — hard error (exit 1) on an unterminated c
     || die "unterminated code fence in ${file} opened at line ${ln}: protocol lines after it are invisible — refusing to verify" 1
 }
 
-# Top-level protocol-comment lines of ANY grammar (asymmetric or peer-review) — used only to
-# detect "the turn added comments but contributed no usable disclosure" below. Never used to
-# attribute an identity, so duplicate lines are deliberately kept (sorted, not uniqued) to match
-# via_ids' multiset semantics.
+# Top-level protocol-comment lines of ANY grammar (asymmetric or peer-review), reduced to each
+# line's IDENTITY KEY (role:id) — used only to detect "the turn added comments but contributed
+# no usable disclosure" below. A key-based diff, not a full-line diff: rewording an existing
+# finding's prose (or adding a stray trailing space) must not read as a newly added comment,
+# only a genuinely new role:id pair should. `finding:f1|high` reduces to `finding:f1` — the id
+# stops at the `|` severity separator. Never used to attribute an identity, so duplicate keys
+# are deliberately kept (sorted, not uniqued) to match via_ids' multiset semantics.
 protocol_lines() { # <file>
-  strip_fences "$1" | grep -E '^> \[(reviewer|author: resolved|finding|concur|dispute|withdraw):' 2>/dev/null | sort
+  strip_fences "$1" \
+    | grep -E '^> \[(reviewer|author: resolved|finding|concur|dispute|withdraw):' 2>/dev/null \
+    | sed -E 's/^> \[(reviewer|author: resolved|finding|concur|dispute|withdraw):([^]|]*).*/\1:\2/' \
+    | sort
 }
 
 via_ids() { # <file> -> disclosed model ids, one per line, sorted — DUPLICATES PRESERVED

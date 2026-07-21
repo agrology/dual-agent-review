@@ -368,6 +368,33 @@ bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/
 [[ "$rc" == 1 ]] && ok "verify-vendor rejects '> — via' with an empty id" \
   || bad "empty-id rc=$rc (want 1)"
 
+# --- FALSE POSITIVE fix: protocol_lines did a full-LINE diff, so rewording an existing
+# --- protocol line's prose (same identity, same disclosure) was counted as a NEWLY ADDED
+# --- protocol comment and failed the "no usable disclosure" check even though nothing new
+# --- was added. The diff must be on the line's IDENTITY KEY (role:id), not the full text.
+RB="${WORK}/reword.base.md"; RD="${WORK}/reword.doc.md"
+printf '# T\n\n<!-- dual-agent-review: awaiting-reviewer · round 2/10 -->\n\n> [reviewer:r1] typo\n> — via gpt-5-codex\n' > "$RB"
+printf '# T\n\n<!-- dual-agent-review: awaiting-author · round 2/10 -->\n\n> [reviewer:r1] typo fixed\n> — via gpt-5-codex\n' > "$RD"
+bash "$SUT" verify-vendor --baseline "$RB" "$RD" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor passes when an existing finding's prose is merely reworded" \
+  || bad "reworded-prose false positive (rc=$rc, want 0)"
+
+# Same identity-key fix: a bare trailing space added to an existing protocol line (same
+# identity, same disclosure) must not read as a new protocol comment either.
+SB="${WORK}/trailspace.base.md"; SD="${WORK}/trailspace.doc.md"
+printf '# T\n\n<!-- dual-agent-review: awaiting-reviewer · round 2/10 -->\n\n> [reviewer:r1] typo\n> — via gpt-5-codex\n' > "$SB"
+printf '# T\n\n<!-- dual-agent-review: awaiting-author · round 2/10 -->\n\n> [reviewer:r1] typo \n> — via gpt-5-codex\n' > "$SD"
+bash "$SUT" verify-vendor --baseline "$SB" "$SD" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor passes when a trailing space is added to an existing protocol line" \
+  || bad "trailing-space false positive (rc=$rc, want 0)"
+
+# Non-regression: a GENUINELY NEW protocol comment (new id) with no usable disclosure must
+# still fail — the identity-key fix must not swallow real undisclosed additions.
+P="$(mkpair newfinding-nodisc '> [reviewer:r1] x\n> — via gpt-5-codex\n' '> [reviewer:r2] y\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor still fails on a genuinely new undisclosed protocol comment" \
+  || bad "new undisclosed comment slipped through (rc=$rc, want 1)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
