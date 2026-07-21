@@ -440,6 +440,17 @@ bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/
 [[ "$rc" == 1 ]] && ok "verify-vendor still fails on a genuinely new undisclosed protocol comment" \
   || bad "new undisclosed comment slipped through (rc=$rc, want 1)"
 
+# --- vendor mapping accepts the BARE provider-family ids some CLIs disclose ---
+# Gemini CLI discloses `gemini` (no version suffix); a `gemini-*`-only pattern leaves that
+# unmappable, and verify-vendor treats unmappable as a mismatch — so the whole route fails.
+# Probed against a CROSS-vendor reviewer (codex/openai): a google-mapped id must be SILENT
+# (checked, cross-vendor); an unmappable id must print the explicit unverified line.
+for id in gemini gemini-3-pro gemini-2.5-flash; do
+  out="$(bash "$SUT" notice "$id" --reviewer codex 2>/dev/null)"
+  [[ -z "$out" ]] && ok "vendor mapping: '$id' -> google (silent vs openai reviewer)" \
+    || bad "vendor mapping: '$id' unmapped -> '$out'"
+done
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

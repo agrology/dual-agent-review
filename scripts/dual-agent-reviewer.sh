@@ -31,7 +31,7 @@ vendor_of_model() { # <model-id> -> vendor
   case "$1" in
     claude-*|*opus*|*sonnet*|*haiku*|*fable*) echo "anthropic" ;;
     gpt-*|o1-*|o3-*|*codex*)                  echo "openai" ;;
-    gemini-*)                                 echo "google" ;;
+    gemini|gemini-*)                          echo "google" ;;
     *)                                        return 1 ;;
   esac
 }
