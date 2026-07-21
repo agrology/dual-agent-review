@@ -92,7 +92,8 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "<positional>"`.
   baseline are invisible to it, so a reviewer hand-back that arrived while you were
   processing would otherwise never wake you. If the re-read still says
   `awaiting-reviewer`, stop your turn and wait to be re-woken when the task exits.
-  Otherwise stop the watcher task and handle the new state via §3 NOW.
+  Otherwise stop the watcher task and handle the new state NOW: `awaiting-author` via §3;
+  `converged`/`exhausted` via §4, so the independence notice is printed on this path too.
 
 ## 2.5 Resolve the route (autonomous by default)
 

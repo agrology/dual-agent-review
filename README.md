@@ -59,8 +59,10 @@ here; the autonomous route surfaces it at the human gate automatically.
 
 ### Manual (two-session) route, per provider
 
-The manual route is the dependency-free default: you open the reviewer yourself and hand it
-the doc's **canonical absolute path**. That rendezvous requirement is provider-independent — a
+The manual route is the dependency-free option — it needs no CLI and no plugin. It is not the
+default (the unattended route is; see "Autonomous review"), but it is what you get via
+`--attended`, on degradation, or by choice. You open the reviewer yourself and hand it the
+doc's **canonical absolute path**. That rendezvous requirement is provider-independent — a
 relative path breaks when the reviewer's session opens in a different checkout.
 
 - **Codex/GPT** — install the bundled skill at `.agents/skills/dual-review/` in your repo and
