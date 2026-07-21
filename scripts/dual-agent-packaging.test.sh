@@ -108,4 +108,15 @@ if [[ -f "$DR" ]]; then
   fi
 fi
 
+# --- /dual-review-auto is a deprecated alias, not a second implementation ---
+DA="${ROOT}/commands/dual-review-auto.md"
+if [[ -f "$DA" ]]; then
+  grep -qi 'deprecated' "$DA" && ok "dual-review-auto.md is marked deprecated" \
+    || bad "dual-review-auto.md is not marked deprecated"
+  [[ "$(wc -l < "$DA")" -lt 30 ]] && ok "dual-review-auto.md is a thin alias" \
+    || bad "dual-review-auto.md still carries a full duplicate implementation"
+  grep -q 'dual-review.md' "$DA" && ok "dual-review-auto.md defers to dual-review.md" \
+    || bad "dual-review-auto.md does not defer to dual-review.md"
+fi
+
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]
