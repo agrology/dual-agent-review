@@ -210,6 +210,20 @@ bash "$SUT" command >/dev/null 2>&1; rc=$?
 bash "$SUT" command "${WORK}/nope.md" --reviewer gemini >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "command with a missing doc exits 2" || bad "command missing-doc rc=$rc (want 2)"
 
+# --- command: model-pin branch (DUAL_AGENT_REVIEWER_MODEL set) ---
+# When DUAL_AGENT_REVIEWER_MODEL is set, the argv includes -m <model> flags.
+DUAL_AGENT_REVIEWER_MODEL=gemini-3-pro bash "$SUT" command "$D" --reviewer gemini > "${WORK}/argv-pinned.bin" 2>/dev/null
+argv_pinned=()
+while IFS= read -r -d '' a; do argv_pinned+=("$a"); done < "${WORK}/argv-pinned.bin"
+[[ ${#argv_pinned[@]} -eq 5 ]] && ok "command(gemini, model-pinned) emits exactly 5 argv elements" \
+  || bad "argv element count was ${#argv_pinned[@]} (want 5)"
+[[ "${argv_pinned[0]}" == "gemini" ]] && ok "pinned argv[0] is the gemini CLI" || bad "pinned argv[0] was '${argv_pinned[0]}'"
+[[ "${argv_pinned[1]}" == "-m" ]] && ok "pinned argv[1] is -m flag" || bad "pinned argv[1] was '${argv_pinned[1]}'"
+[[ "${argv_pinned[2]}" == "gemini-3-pro" ]] && ok "pinned argv[2] is the model" || bad "pinned argv[2] was '${argv_pinned[2]}'"
+nuls_pinned="$(tr -dc '\0' < "${WORK}/argv-pinned.bin" | wc -c | tr -d ' ')"
+[[ "$nuls_pinned" == "5" ]] && ok "pinned argv stream carries exactly 5 NUL terminators (5 elements)" \
+  || bad "pinned NUL count was '$nuls_pinned' (want 5)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
