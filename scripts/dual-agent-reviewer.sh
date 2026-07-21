@@ -63,10 +63,28 @@ resolve_row() { # [--reviewer <id>] -> the full row, or die 2
 
 cmd_resolve() { resolve_row "$@"; }
 
+cmd_check() { # [--reviewer <id>] -> 0 dispatchable, 1 with reason
+  local row id
+  row="$(resolve_row "$@")" || exit 2
+  id="$(field "$row" 1)"
+  case "$id" in
+    fable)
+      return 0 ;;                       # in-harness; nothing external to probe
+    codex)
+      command -v codex >/dev/null 2>&1 \
+        || die "codex CLI not on PATH — the plugin route drives the local Codex CLI" 1 ;;
+    gemini)
+      command -v gemini >/dev/null 2>&1 \
+        || die "gemini CLI not on PATH" 1 ;;
+  esac
+  return 0
+}
+
 # --- dispatch -------------------------------------------------------------
 sub="${1:-}"; [[ -n "$sub" ]] || die "usage: dual-agent-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor> [args]" 2
 shift
 case "$sub" in
   resolve) cmd_resolve "$@" ;;
+  check)   cmd_check "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
 esac

@@ -68,6 +68,43 @@ rc="$(cat "${WORK}/rc.flag" 2>/dev/null || echo TIMEOUT)"
 [[ "$rc" == 2 ]] && ok "--reviewer with no value exits 2" \
   || bad "--reviewer with no value rc=$rc (want 2; TIMEOUT means the arg parser looped)"
 
+# --- check: fable always passes (in-harness, zero external dependencies) ---
+bash "$SUT" check --reviewer fable >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "check fable exits 0 (no external dependency)" || bad "check fable rc=$rc (want 0)"
+
+# --- check: a CLI-backed provider fails with a non-empty reason when the CLI is absent ---
+# Simulating "CLI absent" needs care on two counts, both verified:
+#   1. `PATH=<empty> bash …` cannot find `bash` itself (assignments apply to the lookup),
+#      so the probe would die with 127 before reaching the SUT. Invoke /bin/bash by
+#      absolute path instead.
+#   2. A wholly empty PATH also hides the SUT's OWN toolchain (`cut`, used by `field`),
+#      so `check` would misbehave for an unrelated reason. Keep /usr/bin:/bin on PATH and
+#      rely on the CLIs living elsewhere (e.g. /opt/homebrew/bin).
+EMPTY="${WORK}/emptybin"; mkdir -p "$EMPTY"
+SANDBOX_PATH="${EMPTY}:/usr/bin:/bin"
+
+for p in gemini codex; do
+  if PATH="$SANDBOX_PATH" command -v "$p" >/dev/null 2>&1; then
+    # Cannot simulate absence on this machine; say so rather than assert something false.
+    ok "SKIP check($p) absence case — $p is installed in a system dir on this machine"
+  else
+    err="$(PATH="$SANDBOX_PATH" /bin/bash "$SUT" check --reviewer "$p" 2>&1 >/dev/null)"; rc=$?
+    [[ "$rc" == 1 ]] && ok "check $p exits 1 when the CLI is absent" || bad "check $p rc=$rc (want 1)"
+    [[ -n "$err" ]] && ok "check $p failure reason is non-empty" || bad "check $p reason was empty"
+    grep -qi "$p" <<<"$err" && ok "check $p reason names the missing CLI" || bad "reason did not name $p: '$err'"
+  fi
+done
+
+# --- check: a CLI-backed provider passes when the CLI IS present ---
+FAKE="${WORK}/fakebin"; mkdir -p "$FAKE"
+printf '#!/bin/sh\nexit 0\n' > "${FAKE}/gemini"; chmod +x "${FAKE}/gemini"
+PATH="${FAKE}:$PATH" bash "$SUT" check --reviewer gemini >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "check gemini exits 0 when the CLI is on PATH" || bad "check gemini(present) rc=$rc (want 0)"
+
+# --- check: unknown provider is still a usage error ---
+bash "$SUT" check --reviewer nope >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "check with unknown provider exits 2" || bad "check unknown rc=$rc (want 2)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
