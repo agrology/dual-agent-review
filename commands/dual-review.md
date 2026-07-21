@@ -97,13 +97,17 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "<positional>"`.
 
 ## 2.5 Resolve the route (autonomous by default)
 
-Unless `--attended` was extracted in §1, this command drives the review **unattended**:
+**Step 1 runs on every path.** Both routes need the resolved row — the attended state passes its
+`id` to `prompt` — so resolve first, then branch:
 
 1. Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh resolve`, appending
    `--reviewer <flag-id>` when §1 extracted a `--reviewer` flag (omit the flag entirely
    otherwise, so the env var/default applies) → `id|vendor|kind|model|has-skill`. A non-zero
    exit means an unknown provider — report it and STOP.
-2. `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh check --reviewer <id>` (the row's
+2. **If §1 extracted `--attended`**, skip the check and go straight to the attended state
+   below, carrying the row from step 1. Otherwise this command drives the review
+   **unattended**: run
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh check --reviewer <id>` (the row's
    resolved `id` from step 1, not the raw flag).
    - **exit 0** → run the unattended loop in §3.5.
    - **non-zero** → announce the reason verbatim, then degrade to the attended state below.
