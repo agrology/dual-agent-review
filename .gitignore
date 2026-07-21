@@ -10,3 +10,6 @@
 /docs/superpowers/
 /.superpowers/
 /.dual-agent/
+
+# Local Gemini CLI settings — a per-user prerequisite, not repo policy (see README)
+.gemini/

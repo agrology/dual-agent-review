@@ -74,27 +74,29 @@ relative path breaks when the reviewer's session opens in a different checkout.
   `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
   write access to the repo. Same protocol, same human gate.
 
-  > **Not verified end to end — known blockers.** The `gemini` provider is implemented and
-  > unit-tested, and dispatch was exercised against a real `gemini` CLI (v0.51.0), but no
-  > review has yet run to completion. What we hit, so you don't rediscover it:
+  > **Verified end to end — with one required setting.** A full review was driven through a
+  > real `gemini` CLI (v0.51.0): it read the doc, wrote three findings, flipped the marker, and
+  > passed reviewer-identity verification. Two prerequisites, neither of which this tool sets
+  > for you:
   >
-  > 1. **Gemini CLI honours `.gitignore` when reading files.** A review doc that is gitignored
-  >    cannot be read by the reviewer at all — it fails with *"is ignored by configured ignore
-  >    patterns"*. This makes **PR mode incompatible with the `gemini` provider today**, because
-  >    PR scratch files live under `.dual-agent/reviews/`, which is gitignored by design. It also
-  >    bites local docs if your repo gitignores `docs/specs`/`docs/plans`.
-  > 2. **The CLI must be able to run in the directory.** Outside a trusted folder it exits 55
-  >    until you trust the workspace interactively, or set `GEMINI_CLI_TRUST_WORKSPACE=true`.
-  >    This tool deliberately does **not** pass `--skip-trust` for you — trusted folders are a
-  >    safety control against repo content driving the agent, and disabling it is your decision.
-  > 3. **Auth must be in the environment.** A key in `~/.gemini/.env` was not picked up for
-  >    `gemini -p` in our testing; exporting `GEMINI_API_KEY` worked.
-  > 4. **Free-tier quota is small** (5 requests/day on the default flash model at time of
-  >    writing), which a multi-round review will exhaust quickly.
+  > 1. **`.gemini/settings.json` must disable gitignore filtering** for review docs that are
+  >    gitignored — which includes **all PR-mode scratch files** (`.dual-agent/reviews/…`) and,
+  >    in some repos, `docs/specs`/`docs/plans`. Without it Gemini refuses to read the doc at
+  >    all (*"is ignored by configured ignore patterns"*):
   >
-  > Failure is clean when it happens: the doc is left untouched, the marker is not flipped, and
-  > the autonomous route degrades to the manual flow with the reason stated. The `codex` and
-  > `fable` routes carry none of these caveats and are verified end to end.
+  >    ```json
+  >    { "context": { "fileFiltering": { "respectGitIgnore": false } } }
+  >    ```
+  >
+  > 2. **The workspace must be trusted.** Outside a trusted folder the CLI exits 55. Trust it
+  >    interactively or set `GEMINI_CLI_TRUST_WORKSPACE=true`. This tool deliberately does
+  >    **not** pass `--skip-trust` for you — trusted folders guard against repo content driving
+  >    the agent, and disabling that is your call.
+  >
+  > Also worth knowing: export `GEMINI_API_KEY` (a key in `~/.gemini/.env` was not picked up for
+  > `gemini -p` in our testing), and note the free tier allows only a handful of requests per day
+  > — a multi-round review will exhaust it. Failure is clean throughout: doc untouched, marker
+  > not flipped, and the autonomous route degrades to the manual flow with the reason stated.
 
 **Write access is a trust contract, not a sandbox.** Any reviewer needs write access to the
 doc to append findings and flip the marker. The "read only that document" scope limit is
