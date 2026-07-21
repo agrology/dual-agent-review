@@ -195,6 +195,75 @@ cmd_notice() { # <author-model-id> [--reviewer <id>] -> one line or nothing; alw
   return 0
 }
 
+# Disclosure-shaped lines inside fenced code blocks are documentation, not protocol. The
+# engines strip fences the same way; this is a deliberate small duplication so that
+# dual-agent-core.sh stays untouched (it is a CLI, not a sourceable library).
+strip_fences() { # <file>
+  awk '
+    /^[[:space:]]*```/ { inf = !inf; next }
+    !inf { print }
+  ' "$1"
+}
+
+via_ids() { # <file> -> disclosed model ids, one per line, sorted — DUPLICATES PRESERVED
+  # Sorted but NOT unique, deliberately. `comm` over sorted duplicates yields a MULTISET
+  # difference, so an extra occurrence of an id already present in the baseline still shows
+  # up as new. With `sort -u` it would not: a stale reviewer adding a second
+  # `> — via gpt-5-codex` to a doc that already had one would produce an empty diff and
+  # pass the identity check silently.
+  strip_fences "$1" \
+    | grep -oE '^> — via .+' 2>/dev/null \
+    | sed -E 's/^> — via[[:space:]]*//' \
+    | sed -E 's/[[:space:]]+$//' \
+    | sort
+}
+
+cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
+  local base="" doc=""
+  local -a rest
+  rest=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --baseline)
+        [[ $# -ge 2 ]] || die "--baseline requires a value" 2
+        base="$2"; shift 2 ;;
+      --reviewer)
+        # Same arity guard as resolve_id: `shift 2` on a lone flag does not shift, so an
+        # unguarded `shift 2 || true` here would loop forever.
+        [[ $# -ge 2 ]] || die "--reviewer requires a value" 2
+        rest+=("$1" "$2"); shift 2 ;;
+      *)  [[ -n "$doc" ]] || doc="$1"; shift ;;
+    esac
+  done
+  [[ -n "$base" ]] \
+    || die "verify-vendor requires --baseline <snapshot> (refusing to scan the whole doc)" 2
+  [[ -f "$base" ]] || die "baseline snapshot not found: $base" 2
+  [[ -n "$doc"  ]] || die "usage: dual-agent-reviewer.sh verify-vendor --baseline <snap> <doc> [--reviewer <id>]" 2
+  [[ -f "$doc"  ]] || die "doc not found: $doc" 2
+
+  local row rid rvendor
+  row="$(resolve_row "${rest[@]+"${rest[@]}"}")" || exit 2
+  rid="$(field "$row" 1)"; rvendor="$(field "$row" 2)"
+
+  # Only ids NEW in <doc> relative to <baseline>. There is deliberately no author-id
+  # exemption: the baseline is taken immediately before dispatch, so every new disclosure
+  # belongs to the reviewer turn by construction.
+  local new_ids id v
+  new_ids="$(comm -13 <(via_ids "$base") <(via_ids "$doc"))"
+  [[ -n "$new_ids" ]] || return 0
+
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    if ! v="$(vendor_of_model "$id")"; then
+      die "reviewer identity unverifiable: new disclosure '${id}' maps to no known vendor (expected ${rvendor} for provider '${rid}')" 1
+    fi
+    if [[ "$v" != "$rvendor" ]]; then
+      die "reviewer identity mismatch: new disclosure '${id}' is ${v}, but provider '${rid}' is ${rvendor}" 1
+    fi
+  done <<< "$new_ids"
+  return 0
+}
+
 # --- dispatch -------------------------------------------------------------
 sub="${1:-}"; [[ -n "$sub" ]] || die "usage: dual-agent-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor> [args]" 2
 shift
@@ -204,5 +273,6 @@ case "$sub" in
   prompt)  cmd_prompt "$@" ;;
   command) cmd_command "$@" ;;
   notice)  cmd_notice "$@" ;;
+  verify-vendor) cmd_verify_vendor "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
 esac

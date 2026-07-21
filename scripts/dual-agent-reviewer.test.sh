@@ -250,6 +250,69 @@ grep -qF 'totally-unknown-model' <<<"$out" && ok "notice names the unmappable id
 bash "$SUT" notice >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "notice with no author id exits 2" || bad "notice no-arg rc=$rc (want 2)"
 
+# --- verify-vendor fixtures: <base> is the pre-dispatch snapshot, <doc> the post-turn file ---
+mkpair() { # mkpair <name> <base-extra-lines> <new-extra-lines>; prints "base|doc"
+  local b="${WORK}/$1.base.md" d="${WORK}/$1.doc.md"
+  printf '# T\n\n<!-- dual-agent-review: awaiting-reviewer · round 2/10 -->\n\n%b' "$2" > "$b"
+  printf '# T\n\n<!-- dual-agent-review: awaiting-author · round 2/10 -->\n\n%b%b' "$2" "$3" > "$d"
+  echo "${b}|${d}"
+}
+
+# in-vendor but NOT exact-id: provider codex pinned to gpt-5.5, reviewer discloses gpt-5-codex
+P="$(mkpair invendor '' '> [reviewer:r1] x\n> — via gpt-5-codex\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor passes in-vendor non-exact id (gpt-5.5 -> gpt-5-codex)" \
+  || bad "verify-vendor in-vendor rc=$rc (want 0)"
+
+# out-of-vendor: provider codex, reviewer discloses a Claude id (the real observed drift)
+P="$(mkpair drift '' '> [reviewer:r1] x\n> — via claude-sonnet-4-6\n')"
+err="$(bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex 2>&1 >/dev/null)"; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor fails on out-of-vendor drift" || bad "verify-vendor drift rc=$rc (want 1)"
+grep -qF 'claude-sonnet-4-6' <<<"$err" && ok "drift error names the offending id" || bad "offending id not named: '$err'"
+
+# NO author-id exemption: a new line carrying the AUTHOR's own id must still FAIL for codex
+P="$(mkpair authorid '' '> [reviewer:r1] x\n> — via claude-opus-4-8\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor fails on a new line bearing the author's own id" \
+  || bad "author-id exemption leaked back in (rc=$rc, want 1)"
+
+# lawful mid-review provider switch: OLD gpt lines in the baseline are ignored;
+# only the NEW gemini line is judged, against provider gemini
+P="$(mkpair switch '> [reviewer:r1] old\n> — via gpt-5-codex\n' '> [reviewer:r2] new\n> — via gemini-3-pro\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer gemini >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor ignores pre-existing out-of-vendor lines (lawful switch)" \
+  || bad "lawful provider switch was flagged as drift (rc=$rc, want 0)"
+
+# REPEATED id: baseline already contains gpt-5-codex; the turn adds ANOTHER one while the
+# provider is gemini. A unique-set diff would report nothing and pass — this must FAIL.
+P="$(mkpair repeat '> [reviewer:r1] old\n> — via gpt-5-codex\n' '> [reviewer:r2] new\n> — via gpt-5-codex\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer gemini >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor catches a REPEATED out-of-vendor id (multiset diff)" \
+  || bad "repeated out-of-vendor id slipped through (rc=$rc, want 1) — set diff instead of multiset?"
+
+# an UNMAPPABLE new id is a MISMATCH, not a pass
+P="$(mkpair unmappable '' '> [reviewer:r1] x\n> — via mystery-model\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 1 ]] && ok "verify-vendor treats an unmappable id as a mismatch" || bad "unmappable id passed (rc=$rc, want 1)"
+
+# no new disclosures at all -> nothing to judge -> pass
+P="$(mkpair nonew '> [reviewer:r1] old\n> — via gpt-5-codex\n' '')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor passes when the turn added no disclosures" || bad "no-new-lines rc=$rc (want 0)"
+
+# fenced examples are NOT protocol lines (documentation must not trip the check)
+P="$(mkpair fenced '' '```text\n> — via claude-sonnet-4-6\n```\n')"
+bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 0 ]] && ok "verify-vendor ignores disclosure-shaped lines inside fenced blocks" \
+  || bad "fenced example tripped the check (rc=$rc, want 0)"
+
+# --baseline is REQUIRED: absence is a usage error, never a silent whole-doc scan
+P="$(mkpair nobase '' '> [reviewer:r1] x\n> — via gpt-5-codex\n')"
+bash "$SUT" verify-vendor "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "verify-vendor without --baseline exits 2" || bad "missing --baseline rc=$rc (want 2)"
+bash "$SUT" verify-vendor --baseline "${WORK}/nope.md" "${P#*|}" --reviewer codex >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "verify-vendor with a missing baseline file exits 2" || bad "bad baseline rc=$rc (want 2)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
