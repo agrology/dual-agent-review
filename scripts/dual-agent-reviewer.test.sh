@@ -107,10 +107,12 @@ bash "$SUT" check --reviewer nope >/dev/null 2>&1; rc=$?
 
 # --- prompt: codex output is BYTE-IDENTICAL to the pre-change emitter ---
 D="$(mkdoc spec.md awaiting-reviewer)"
-new="$(bash "$SUT" prompt "$D" --reviewer codex 2>/dev/null)"
-old="$(bash "${DIR}/dual-agent-codex-prompt.sh" "$D" 2>/dev/null)"
-[[ "$new" == "$old" ]] && ok "codex prompt is byte-identical to the old emitter" \
-  || { bad "codex prompt drifted from the old emitter"; diff <(echo "$old") <(echo "$new") | head -20; }
+# Byte-identity is locked against a checked-in golden captured from the original emitter.
+# The doc path is normalized to @@DOC@@ because it varies per machine.
+new="$(bash "$SUT" prompt "$D" --reviewer codex 2>/dev/null | sed "s|$(cd "$(dirname "$D")" && pwd -P)/$(basename "$D")|@@DOC@@|g")"
+golden="$(cat "${DIR}/fixtures/codex-prompt.golden.txt")"
+[[ "$new" == "$golden" ]] && ok "codex prompt matches the golden fixture byte-for-byte" \
+  || { bad "codex prompt drifted from the golden"; diff <(echo "$golden") <(echo "$new") | head -20; }
 
 # --- prompt: the canonical ABSOLUTE path is the rendezvous, for every provider ---
 abs="$(cd "$(dirname "$D")" && pwd -P)/$(basename "$D")"

@@ -74,7 +74,7 @@ here; the autonomous route surfaces it at the human gate automatically.
 - `scripts/dual-agent-wait.sh` — lock-free bounded marker wait (reviewer-side resume)
 - `scripts/dual-agent-pr.sh` — PR-URL mode: ingest a GitHub PR into a local scratch file, then publish the converged review
 - `scripts/dual-agent-peer.sh` — symmetric peer-review grammar (mode detect, open-findings, convergence) for PR-mode docs
-- `scripts/dual-agent-codex-prompt.sh` — optional: emits the `/codex:rescue` reviewer prompt for the Codex-plugin route
+- `scripts/dual-agent-reviewer.sh prompt` — optional: emits the `/codex:rescue` reviewer prompt for the Codex-plugin route
 - `scripts/dual-agent-auto-step.sh` — per-round verdict (continue/terminal/stop) for the autonomous loop
 - `scripts/dual-agent-build-reviewer-bundle.sh` — regenerates the bundled reviewer skill from the canonical sources
 - `scripts/dual-agent-history-check.sh` — scans the full git history for internal/sensitive terms; the pre-publish safety gate (see `PUBLISHING.md`)
@@ -165,7 +165,11 @@ From the armed author session, get the canonical reviewer prompt and hand it to 
 (the author runs this in its plugin context, where `${CLAUDE_PLUGIN_ROOT}` is set; from a plain
 clone, use the bare `scripts/…` path instead):
 
-    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-codex-prompt.sh docs/specs/2026-06-09-my-feature.md
+    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh prompt docs/specs/2026-06-09-my-feature.md
+
+> **Migration:** `dual-agent-codex-prompt.sh` was removed in favour of
+> `dual-agent-reviewer.sh prompt <doc>`, which emits the same prompt for Codex and a
+> provider-appropriate one for `fable`/`gemini`.
 
 Paste the output into the plugin as a background reviewer turn (`--wait` blocks until Codex is
 done, so the author wakes on the hand-back):
