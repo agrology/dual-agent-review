@@ -21,6 +21,15 @@ mkdoc() { # mkdoc <name> <state>; prints path
   echo "$p"
 }
 
+# --- Finding 3 fixture: a scratch copy of the SUT with an extra provider ("ghost") registered
+# in provider_row but deliberately left unhandled in cmd_check/cmd_command's own case
+# statements — reproduces "a provider added to the registry without a matching dispatch arm"
+# without needing to touch the real registry. Inserted right after the real `gemini)` arm.
+UNHANDLED="${WORK}/reviewer-unhandled.sh"
+awk '{print} /gemini\) echo "gemini\|google\|shell/{print "    ghost)  echo \"ghost|nowhere|shell|ghost-model|no\" ;;"}' \
+  "$SUT" > "$UNHANDLED"
+grep -q '^    ghost)' "$UNHANDLED" || { echo "FIXTURE SETUP FAILED: ghost arm not inserted"; exit 1; }
+
 # --- resolve: default is codex ---
 out="$(env -u DUAL_AGENT_REVIEWER bash "$SUT" resolve 2>/dev/null)"; rc=$?
 [[ "$rc" == 0 ]] && ok "resolve exits 0" || bad "resolve rc=$rc (want 0)"
@@ -68,6 +77,21 @@ rc="$(cat "${WORK}/rc.flag" 2>/dev/null || echo TIMEOUT)"
 [[ "$rc" == 2 ]] && ok "--reviewer with no value exits 2" \
   || bad "--reviewer with no value rc=$rc (want 2; TIMEOUT means the arg parser looped)"
 
+# --- Finding 4 regression: the arity-error die must not be followed by a second, ---
+# --- contradictory "unknown reviewer provider: " (empty id) message. `resolve_id`'s die ---
+# --- runs inside resolve_row's command substitution, so an unguarded caller falls ---
+# --- through with id="" and layers a misleading second error on top of the real one. ---
+err="$(bash "$SUT" resolve --reviewer 2>&1 >/dev/null)"
+[[ "$(grep -c 'requires a value' <<<"$err")" == 1 ]] \
+  && ok "resolve --reviewer (no value) reports the arity error exactly once" \
+  || bad "arity error line count wrong: '$err'"
+grep -qi 'unknown reviewer provider' <<<"$err" \
+  && bad "resolve --reviewer (no value) ALSO emits the contradictory 'unknown reviewer provider' message: '$err'" \
+  || ok "no contradictory 'unknown reviewer provider' message follows the arity error"
+[[ "$(wc -l <<<"$err" | tr -d ' ')" == 1 ]] \
+  && ok "resolve --reviewer (no value) prints exactly one error line" \
+  || bad "expected exactly one error line, got: '$err'"
+
 # --- check: fable always passes (in-harness, zero external dependencies) ---
 bash "$SUT" check --reviewer fable >/dev/null 2>&1; rc=$?
 [[ "$rc" == 0 ]] && ok "check fable exits 0 (no external dependency)" || bad "check fable rc=$rc (want 0)"
@@ -104,6 +128,15 @@ PATH="${FAKE}:$PATH" bash "$SUT" check --reviewer gemini >/dev/null 2>&1; rc=$?
 # --- check: unknown provider is still a usage error ---
 bash "$SUT" check --reviewer nope >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "check with unknown provider exits 2" || bad "check unknown rc=$rc (want 2)"
+
+# --- Finding 3 regression: check fails CLOSED (not "dispatchable") for a provider that is ---
+# --- registered but has no matching arm in check's own case statement (uses the "ghost" ---
+# --- fixture above) ---
+err="$(bash "$UNHANDLED" check --reviewer ghost 2>&1 >/dev/null)"; rc=$?
+[[ "$rc" != 0 ]] && ok "check fails closed for a provider unhandled in its own case (rc=$rc)" \
+  || bad "check reported dispatchable (rc=0) for an unhandled provider — fails OPEN"
+grep -qi 'ghost' <<<"$err" && ok "check's fail-closed error names the unhandled provider" \
+  || bad "check's fail-closed error did not name the provider: '$err'"
 
 # --- prompt: codex output is BYTE-IDENTICAL to the pre-change emitter ---
 D="$(mkdoc spec.md awaiting-reviewer)"
@@ -211,6 +244,16 @@ bash "$SUT" command >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "command with no doc exits 2" || bad "command no-arg rc=$rc (want 2)"
 bash "$SUT" command "${WORK}/nope.md" --reviewer gemini >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "command with a missing doc exits 2" || bad "command missing-doc rc=$rc (want 2)"
+
+# --- Finding 3 regression: command fails CLOSED (not silently empty argv) for a shell-kind ---
+# --- provider that is registered but has no matching arm in command's own case statement ---
+# --- (uses the "ghost" fixture above; ghost is registered as shell-kind so it clears the ---
+# --- subagent-kind refusal above and reaches the unhandled case arm). ---
+err="$(bash "$UNHANDLED" command "$D" --reviewer ghost 2>&1 >/dev/null)"; rc=$?
+[[ "$rc" != 0 ]] && ok "command fails closed for a provider unhandled in its own case (rc=$rc)" \
+  || bad "command exited 0 (silently empty argv) for an unhandled provider — fails OPEN"
+grep -qi 'ghost' <<<"$err" && ok "command's fail-closed error names the unhandled provider" \
+  || bad "command's fail-closed error did not name the provider: '$err'"
 
 # --- command: model-pin branch (DUAL_AGENT_REVIEWER_MODEL set) ---
 # When DUAL_AGENT_REVIEWER_MODEL is set, the argv includes -m <model> flags.
