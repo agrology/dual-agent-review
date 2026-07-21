@@ -45,10 +45,19 @@ out="$(DUAL_AGENT_REVIEWER=fable bash "$SUT" resolve 2>/dev/null)"
 out="$(DUAL_AGENT_REVIEWER=fable bash "$SUT" resolve --reviewer codex 2>/dev/null)"
 [[ "$out" == codex\|* ]] && ok "--reviewer flag overrides the env var" || bad "precedence row was '$out'"
 
-# --- resolve: gemini is shell-kind, google, skill-less, no model pinned by default ---
+# --- resolve: codex default is overridable (nothing is unoverridable) ---
+out="$(env -u DUAL_AGENT_REVIEWER bash "$SUT" resolve --reviewer codex 2>/dev/null)"
+[[ "$out" == "codex|openai|subagent|gpt-5.5|yes" ]] \
+  && ok "codex falls back to its documented default model" || bad "codex default row was '$out'"
+out="$(DUAL_AGENT_REVIEWER_MODEL=gpt-9-turbo bash "$SUT" resolve --reviewer codex 2>/dev/null)"
+[[ "$out" == "codex|openai|subagent|gpt-9-turbo|yes" ]] \
+  && ok "DUAL_AGENT_REVIEWER_MODEL overrides the codex default" || bad "codex override row was '$out'"
+
+# --- resolve: gemini is shell-kind, google, skill-less, defaulted to the latest pro alias ---
 out="$(bash "$SUT" resolve --reviewer gemini 2>/dev/null)"
-[[ "$out" == "gemini|google|shell||no" ]] \
-  && ok "gemini row is shell-kind/google/skill-less" || bad "gemini row was '$out'"
+[[ "$out" == "gemini|google|shell|gemini-pro-latest|no" ]] \
+  && ok "gemini defaults to gemini-pro-latest (published alias, not a pinned version)" \
+  || bad "gemini row was '$out'"
 
 # --- resolve: DUAL_AGENT_REVIEWER_MODEL pins the model for CLI-backed providers ---
 out="$(DUAL_AGENT_REVIEWER_MODEL=gemini-3-pro bash "$SUT" resolve --reviewer gemini 2>/dev/null)"
@@ -216,7 +225,7 @@ first=""; IFS= read -r -d '' first < "${WORK}/argv.bin"
 [[ "$first" == "gemini" ]] && ok "command(gemini) argv[0] is the gemini CLI" || bad "argv[0] was '$first'"
 # the raw stream really is NUL-delimited (guards against a space-joined regression)
 nuls="$(tr -dc '\0' < "${WORK}/argv.bin" | wc -c | tr -d ' ')"
-[[ "$nuls" == "3" ]] && ok "argv stream carries exactly 3 NUL delimiters" || bad "NUL count was '$nuls' (want 3)"
+[[ "$nuls" == "5" ]] && ok "argv stream carries exactly 5 NUL delimiters (gemini -m <model> -p <prompt>)" || bad "NUL count was '$nuls' (want 5)"
 
 # --- command: NUL round-trip through the BASH 3.2-SAFE consumer, with a spaced path ---
 # --- and a prompt containing newlines and quotes. Run under /bin/bash (3.2 on macOS) so a ---
@@ -234,7 +243,7 @@ i=0; for a in "${argv[@]}"; do i=$((i+1)); printf 'ARG%s<%s>\n' "$i" "$a"; done
 CONSUMER
 rt="$(/bin/bash "${WORK}/consume.sh" "$SUT" "$DS" 2>/dev/null)"; rc=$?
 [[ "$rc" == 0 ]] && ok "NUL argv round-trip runs under /bin/bash (3.2-safe)" || bad "3.2 consumer rc=$rc"
-grep -q '^count=3$' <<<"$rt" && ok "round-trip yields exactly 3 argv elements" || bad "argv count wrong: $(grep '^count=' <<<"$rt")"
+grep -q '^count=5$' <<<"$rt" && ok "round-trip yields exactly 5 argv elements" || bad "argv count wrong: $(grep '^count=' <<<"$rt")"
 grep -qF "${DS}" <<<"$rt" && ok "spaced doc path survives the round-trip intact" || bad "spaced path mangled in round-trip"
 grep -qF 'Do ONE reviewer turn' <<<"$rt" && ok "multi-line prompt survives as one argv element" || bad "prompt element mangled"
 grep -qF '`> — via <your-model-id>`' <<<"$rt" && ok "quote/backtick characters survive intact" || bad "quote characters mangled"

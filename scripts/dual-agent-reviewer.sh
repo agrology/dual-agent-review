@@ -15,11 +15,21 @@ die() { echo "dual-agent-reviewer: $1" >&2; exit "$2"; }
 
 # --- registry -------------------------------------------------------------
 # A case statement rather than an associative array: bash 3.2 has no `declare -A`.
+# Model defaults prefer a provider-PUBLISHED alias over a version we pin ourselves, so a new
+# release is picked up without a code change:
+#   gemini  — `gemini-pro-latest` is Google's own alias for the current top Pro tier. Without a
+#             `-m`, the CLI defaults to the cheaper flash tier, which is a weaker reviewer.
+#   fable   — already an alias the harness resolves; there is no version here to go stale.
+#   codex   — OpenAI publishes no "latest" alias, so a named default is unavoidable. It must be
+#             non-empty: an unset model lets the `codex:codex-rescue` wrapper answer as Claude.
+#             `verify-vendor` catches that after the fact; this keeps it from happening.
+# DUAL_AGENT_REVIEWER_MODEL overrides the default for whichever provider is selected — nothing
+# here is unoverridable.
 provider_row() { # <id> -> "id|vendor|dispatch-kind|model|has-skill"
   case "$1" in
-    codex)  echo "codex|openai|subagent|gpt-5.5|yes" ;;
+    codex)  echo "codex|openai|subagent|${DUAL_AGENT_REVIEWER_MODEL:-gpt-5.5}|yes" ;;
     fable)  echo "fable|anthropic|subagent|fable|no" ;;
-    gemini) echo "gemini|google|shell|${DUAL_AGENT_REVIEWER_MODEL:-}|no" ;;
+    gemini) echo "gemini|google|shell|${DUAL_AGENT_REVIEWER_MODEL:-gemini-pro-latest}|no" ;;
     *)      return 1 ;;
   esac
 }
@@ -176,11 +186,9 @@ cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
   #   argv=(); while IFS= read -r -d '' a; do argv+=("$a"); done < <(… command "$doc")
   case "$id" in
     gemini)
-      if [[ -n "$model" ]]; then
-        printf '%s\0' "gemini" "-m" "$model" "-p" "$prompt"
-      else
-        printf '%s\0' "gemini" "-p" "$prompt"
-      fi ;;
+      # `model` always carries a value (registry default or the env override), so the model is
+      # always explicit — we never fall through to the CLI's own default tier.
+      printf '%s\0' "gemini" "-m" "$model" "-p" "$prompt" ;;
     *)
       die "no shell command defined for reviewer provider '${id}'" 2 ;;
   esac
