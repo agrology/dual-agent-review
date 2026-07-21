@@ -164,6 +164,52 @@ before="$(cat "$D")"
 bash "$SUT" prompt "$D" --reviewer gemini >/dev/null 2>&1
 [[ "$(cat "$D")" == "$before" ]] && ok "prompt does not touch the doc" || bad "prompt modified the doc"
 
+# --- command: refuses subagent-kind providers (they need the Agent tool, not a shell) ---
+for p in codex fable; do
+  err="$(bash "$SUT" command "$D" --reviewer "$p" 2>&1 >/dev/null)"; rc=$?
+  [[ "$rc" == 2 ]] && ok "command refuses subagent-kind provider $p" || bad "command($p) rc=$rc (want 2)"
+  [[ -n "$err" ]] && ok "command($p) refusal has a reason" || bad "command($p) refusal reason empty"
+done
+
+# --- command: shell-kind emits argv whose first element is the CLI ---
+# --- A command substitution CANNOT carry NUL bytes — bash drops or truncates them, so ---
+# --- `out="$(… command …)"` would silently destroy the delimiters and the assertion    ---
+# --- could pass while testing nothing. Redirect to a file and read one NUL-terminated  ---
+# --- field instead.                                                                     ---
+bash "$SUT" command "$D" --reviewer gemini > "${WORK}/argv.bin" 2>/dev/null
+first=""; IFS= read -r -d '' first < "${WORK}/argv.bin"
+[[ "$first" == "gemini" ]] && ok "command(gemini) argv[0] is the gemini CLI" || bad "argv[0] was '$first'"
+# the raw stream really is NUL-delimited (guards against a space-joined regression)
+nuls="$(tr -dc '\0' < "${WORK}/argv.bin" | wc -c | tr -d ' ')"
+[[ "$nuls" == "3" ]] && ok "argv stream carries exactly 3 NUL delimiters" || bad "NUL count was '$nuls' (want 3)"
+
+# --- command: NUL round-trip through the BASH 3.2-SAFE consumer, with a spaced path ---
+# --- and a prompt containing newlines and quotes. Run under /bin/bash (3.2 on macOS) so a ---
+# --- bash 4+ construct cannot silently re-enter the shell-kind caller.                    ---
+SPACED="${WORK}/Work Projects"; mkdir -p "$SPACED"
+DS="${SPACED}/spec doc.md"
+printf '# T\n\n<!-- dual-agent-review: awaiting-reviewer · round 2/10 -->\n' > "$DS"
+cat > "${WORK}/consume.sh" <<'CONSUMER'
+#!/bin/bash
+SUT="$1"; DOC="$2"
+argv=()
+while IFS= read -r -d '' a; do argv+=("$a"); done < <(bash "$SUT" command "$DOC" --reviewer gemini)
+echo "count=${#argv[@]}"
+i=0; for a in "${argv[@]}"; do i=$((i+1)); printf 'ARG%s<%s>\n' "$i" "$a"; done
+CONSUMER
+rt="$(/bin/bash "${WORK}/consume.sh" "$SUT" "$DS" 2>/dev/null)"; rc=$?
+[[ "$rc" == 0 ]] && ok "NUL argv round-trip runs under /bin/bash (3.2-safe)" || bad "3.2 consumer rc=$rc"
+grep -q '^count=3$' <<<"$rt" && ok "round-trip yields exactly 3 argv elements" || bad "argv count wrong: $(grep '^count=' <<<"$rt")"
+grep -qF "${DS}" <<<"$rt" && ok "spaced doc path survives the round-trip intact" || bad "spaced path mangled in round-trip"
+grep -qF 'Do ONE reviewer turn' <<<"$rt" && ok "multi-line prompt survives as one argv element" || bad "prompt element mangled"
+grep -qF '`> — via <your-model-id>`' <<<"$rt" && ok "quote/backtick characters survive intact" || bad "quote characters mangled"
+
+# --- command: usage errors ---
+bash "$SUT" command >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "command with no doc exits 2" || bad "command no-arg rc=$rc (want 2)"
+bash "$SUT" command "${WORK}/nope.md" --reviewer gemini >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "command with a missing doc exits 2" || bad "command missing-doc rc=$rc (want 2)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

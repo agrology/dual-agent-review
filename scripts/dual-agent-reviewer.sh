@@ -151,6 +151,31 @@ cmd_prompt() { # <doc> [--reviewer <id>]
   emit_prompt "$(abs_path "$doc")" "$has_skill"
 }
 
+cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
+  local doc="${1:-}"
+  [[ -n "$doc" ]] || die "usage: dual-agent-reviewer.sh command <doc-path> [--reviewer <id>]" 2
+  shift
+  [[ -f "$doc" ]] || die "doc not found: $doc" 2
+  local row id kind model has_skill prompt
+  row="$(resolve_row "$@")" || exit 2
+  id="$(field "$row" 1)"; kind="$(field "$row" 3)"
+  model="$(field "$row" 4)"; has_skill="$(field "$row" 5)"
+  [[ "$kind" == "shell" ]] \
+    || die "provider '${id}' is dispatch-kind '${kind}'; 'command' is shell-kind only (dispatch it via the Agent tool)" 2
+  prompt="$(emit_prompt "$(abs_path "$doc")" "$has_skill")"
+  # NUL-delimited: the prompt is multi-line and doc paths contain spaces, so the caller must
+  # never re-parse this through a shell. Consumer idiom (bash 3.2 safe, no mapfile):
+  #   argv=(); while IFS= read -r -d '' a; do argv+=("$a"); done < <(… command "$doc")
+  case "$id" in
+    gemini)
+      if [[ -n "$model" ]]; then
+        printf '%s\0' "gemini" "-m" "$model" "-p" "$prompt"
+      else
+        printf '%s\0' "gemini" "-p" "$prompt"
+      fi ;;
+  esac
+}
+
 # --- dispatch -------------------------------------------------------------
 sub="${1:-}"; [[ -n "$sub" ]] || die "usage: dual-agent-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor> [args]" 2
 shift
@@ -158,5 +183,6 @@ case "$sub" in
   resolve) cmd_resolve "$@" ;;
   check)   cmd_check "$@" ;;
   prompt)  cmd_prompt "$@" ;;
+  command) cmd_command "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
 esac
