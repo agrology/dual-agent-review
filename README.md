@@ -61,7 +61,7 @@ here; the autonomous route surfaces it at the human gate automatically.
 
 - `docs/dual-agent-review.md` — the protocol contract
 - `commands/dual-review.md` — the `/dual-review` author-mode command
-- `commands/dual-review-auto.md` — the `/dual-review-auto` autonomous command
+- `commands/dual-review-auto.md` — `/dual-review-auto`, a deprecated alias for `/dual-review`
 - `.claude-plugin/plugin.json` — the Claude Code plugin manifest
 - `.agents/skills/dual-review/` — the self-contained `/dual-review` Codex/GPT reviewer skill
   (bundled copies of the protocol doc + reviewer scripts; not installed by the plugin — see
@@ -191,28 +191,38 @@ drift) into a flow the core deliberately keeps self-contained and offline, and C
 count against your Codex usage/billing. It is a convenience layer, not a replacement — the manual
 second-session route stays the default and remains fully supported.
 
-## Autonomous review (`/dual-review-auto`)
+## Autonomous review (`/dual-review`, unattended by default)
 
-With the Codex plugin installed (see above), `/dual-review-auto <doc-or-PR>` runs the **entire
-review loop unattended in one session** — Claude takes the author turns and summons Codex for
-each reviewer turn — until the marker reaches `converged`/`exhausted`, then stops at the **human
-gate** (and, in PR mode, the human-gated publish). It covers both asymmetric and peer-review
-modes.
+`/dual-review <doc-or-PR>` runs the **entire review loop unattended in one session** by
+default — Claude takes the author turns and dispatches the reviewer for each reviewer turn —
+until the marker reaches `converged`/`exhausted`, then stops at the **human gate** (and, in PR
+mode, the human-gated publish). It covers both asymmetric and peer-review modes. Pass
+`--attended` to fall back to the manual, two-session handoff instead.
 
-    /dual-review-auto docs/specs/2026-06-09-my-feature.md
+    /dual-review docs/specs/2026-06-09-my-feature.md
 
-Each reviewer turn is dispatched with **`--model gpt-5.5`** so the reviewer is a real, consistent
-GPT model (the `codex:codex-rescue` agent is a Claude `sonnet` wrapper; pinning the model keeps an
-unset turn from running as the wrapper). To use a different model, change the `--model` value in
-`commands/dual-review-auto.md` §3.
+The reviewer provider is selected with `DUAL_AGENT_REVIEWER` (`codex`, `fable`, or `gemini`;
+defaults to `codex`) or a per-invocation `--reviewer <id>` flag. For `gemini`,
+`DUAL_AGENT_REVIEWER_MODEL` pins the model; for `codex`, each turn is dispatched with
+`--model gpt-5.5` so the reviewer is a real, consistent GPT model rather than the
+`codex:codex-rescue` agent's Claude `sonnet` wrapper falling through unset.
 
-Safety: any non-conformant turn (Codex didn't flip the marker, an illegal marker transition, a
-malformed doc, or a dispatch failure) **stops the loop and surfaces** — no retry, no faked
-progress (enforced by `scripts/dual-agent-auto-step.sh`). Nothing auto-merges or auto-posts.
+If the chosen provider isn't available (e.g. the Codex CLI isn't installed or authenticated),
+the command announces the reason and degrades to the attended, manual-handoff flow rather than
+failing silently.
 
-Independence note: Claude decides when to summon Codex and with what prompt, so this narrows
-independence of *control* (Codex still runs its own skill in its own context). For a maximally
-adversarial second opinion, the manual `/dual-review` route remains and stays the default.
+`/dual-review-auto` is now a **deprecated alias** for `/dual-review` — it forwards to the same
+command and behavior described here.
+
+Safety: any non-conformant turn (the reviewer didn't flip the marker, an illegal marker
+transition, a malformed doc, or a dispatch failure) **stops the loop and surfaces** — no retry,
+no faked progress (enforced by `scripts/dual-agent-auto-step.sh`). Nothing auto-merges or
+auto-posts.
+
+Independence note: Claude decides when to summon the reviewer and with what prompt, so this
+narrows independence of *control* (the reviewer still runs its own skill in its own context).
+For a maximally adversarial second opinion, the attended (`--attended`) route remains fully
+supported.
 
 ## Tests
 

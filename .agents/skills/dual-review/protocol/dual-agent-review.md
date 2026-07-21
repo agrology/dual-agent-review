@@ -6,11 +6,11 @@
 ## Roles
 
 - **Author** (Claude, via `/dual-review`): drafts/revises the doc, resolves concerns.
-- **Reviewer** (any external agent you drive separately, e.g. Codex): leaves concerns.
-  Driven in its own session — or, optionally, summoned from the author's machine via the
-  Codex plugin (`scripts/dual-agent-codex-prompt.sh` → `/codex:rescue`; see the README).
-- **Autonomous variant:** `/dual-review-auto` runs the whole loop unattended via the Codex
-  plugin, ending at the same human gate (see the README). The manual route stays the default.
+- **Reviewer** (any external agent you drive separately — Codex, Claude Fable 5, or Gemini):
+  leaves concerns. Driven in its own session — or, optionally, summoned from the author's
+  machine via `scripts/dual-agent-reviewer.sh prompt` (see the README).
+- **Autonomous by default:** `/dual-review` runs the whole loop unattended, ending at the
+  same human gate (see the README). `/dual-review-auto` is a deprecated alias for it.
 
 ## Status marker (the single coordination signal)
 
