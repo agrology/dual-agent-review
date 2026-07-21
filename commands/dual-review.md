@@ -107,6 +107,66 @@ point where the choice is announced, rather than re-read each round where a muta
 could swap reviewers mid-review without anyone noticing. Switching provider means ending the
 run and re-invoking the command.
 
+## 3.5 The unattended loop
+
+Repeat until `dual-agent-auto-step.sh` returns `terminal` or `stop`:
+
+1. Record `prev_state`/`prev_round` from `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh marker "<doc>"`.
+2. **`awaiting-author`** → take the author turn exactly as §3 prescribes for the doc's mode,
+   then `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh next-marker "<doc>" author-done`.
+3. **`awaiting-reviewer`** → dispatch one reviewer turn:
+   a. **Snapshot first:** `cp "<doc>" "<doc>.baseline"`. This must happen *immediately* before
+      dispatch — it is what scopes the identity check to this turn alone.
+   b. Use the `id|vendor|kind|model|has-skill` row **resolved once in §2.5**. Do **not** call
+      `resolve` again inside the loop: re-resolving each round would make the active reviewer
+      depend on mutable environment state, so an env change mid-run could silently swap
+      providers between rounds — the exact silent substitution §2.5 forbids. It would also
+      desynchronise `verify-vendor`, which judges a turn against "the resolved provider".
+      A deliberate provider change is made by ending this run and re-invoking the command,
+      which re-resolves at §2.5 and states the choice; it is never a mid-loop mutation.
+   c. Branch on `kind`:
+      - **`subagent`** → dispatch the Agent tool with the resolved `model`, passing the output
+        of `dual-agent-reviewer.sh prompt "<doc>" --reviewer <id>` as the task text. For
+        `codex` use the `codex:codex-rescue` agent with `--model <model> --write`; for `fable`
+        use `general-purpose` with `model: fable`. The `--model`/`--write` flags are runtime
+        controls, stripped from the task text — never part of the payload.
+      - **`shell`** → read NUL-delimited argv and execute it without a shell round-trip:
+
+            argv=()
+            while IFS= read -r -d '' a; do argv+=("$a"); done \
+              < <("${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh" command "<doc>" --reviewer <id>)
+            "${argv[@]}"
+
+        Use this exact loop, not `mapfile` — macOS ships bash 3.2, which has no `mapfile`.
+   d. **Verify identity BEFORE validating transitions:**
+      `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh verify-vendor --baseline "<doc>.baseline" "<doc>" --reviewer <id>`.
+      Non-zero → **anomaly stop**: the model that ran was not the one selected, so the round's
+      output cannot be trusted. Surface it and STOP. Do not retry, do not re-dispatch.
+   e. Remove the snapshot: `rm -f "<doc>.baseline"`.
+4. Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-auto-step.sh "<doc>" "<prev_state>" "<prev_round>"`:
+   `continue` (0) → loop; `terminal` (10) → §4; `stop` (20) → an **anomaly stop** — surface
+   `auto-step`'s `stop <reason>` and the partial round trail at the human gate, same as 3.d
+   above. Do not retry, do not re-dispatch, do not edit the marker.
+
+A **dispatch failure** (the agent/CLI could not be invoked at all) is a *degradation trigger*,
+not an anomaly stop: announce it and drop to the attended state from §2.5. Anomaly stops are
+reserved for a turn that ran but cannot be trusted — an identity mismatch — or for protocol
+violations detected by `auto-step`.
+
+## 4. Terminal — human gate
+
+Branch on the marker exactly as before (`converged` → run the mode-matched convergence check;
+`exhausted` → present the trail, no convergence check). In **both** cases, before handing back
+to the engineer, print the independence notice beside the round summary:
+
+    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh notice "<your-model-id>" --reviewer <id>
+
+It prints one line when author and reviewer share a vendor, an explicit *unverified* line if
+the author id cannot be mapped, and nothing when they are genuinely cross-vendor — so silence
+means "checked and cross-vendor", never "not checked".
+
+STOP at the gate. Never implement, commit, or open a PR from this command.
+
 ## 3. On each wake — branch on the marker ONLY
 
 Read it with `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh marker "<doc>"`:

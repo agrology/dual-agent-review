@@ -67,4 +67,31 @@ if [[ -f "$DR" ]]; then
     || bad "§2 awaiting-reviewer branch does not defer to §2.5 before arming"
 fi
 
+# --- the unattended loop verifies reviewer identity BEFORE validating transitions ---
+if [[ -f "$DR" ]]; then
+  grep -q 'verify-vendor' "$DR" && ok "dual-review.md runs verify-vendor" \
+    || bad "dual-review.md never runs verify-vendor"
+  grep -q -- '--baseline' "$DR" && ok "dual-review.md passes a baseline snapshot" \
+    || bad "dual-review.md does not pass --baseline"
+  # verify-vendor must appear BEFORE auto-step in the dispatch section.
+  # Match the actual INVOCATIONS (they carry the "<doc>" argument), not prose mentions —
+  # §3.5 opens with "Repeat until `dual-agent-auto-step.sh` returns …", which would
+  # otherwise be picked up as the first occurrence and invert the comparison.
+  vv="$(grep -nF 'verify-vendor --baseline' "$DR" | head -1 | cut -d: -f1)"
+  as="$(grep -nF 'dual-agent-auto-step.sh "<doc>"' "$DR" | head -1 | cut -d: -f1)"
+  if [[ -n "$vv" && -n "$as" && "$vv" -lt "$as" ]]; then
+    ok "identity check is ordered before auto-step"
+  else
+    bad "verify-vendor must precede auto-step (vv=$vv auto-step=$as)"
+  fi
+  grep -q 'dual-agent-reviewer.sh notice' "$DR" && ok "the human gate prints the independence notice" \
+    || bad "notice is not printed at the human gate"
+  # the provider is resolved ONCE (§2.5) and carried; the loop must not re-resolve
+  grep -qi 'resolved once in' "$DR" && ok "the loop reuses the provider resolved in §2.5" \
+    || bad "dual-review.md does not state the provider is resolved once and carried"
+  [[ "$(grep -cF 'dual-agent-reviewer.sh resolve' "$DR")" -eq 1 ]] \
+    && ok "resolve is invoked exactly once in the command" \
+    || bad "resolve appears more than once — the loop may re-resolve mid-run"
+fi
+
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]
