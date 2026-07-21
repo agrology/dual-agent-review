@@ -10,7 +10,7 @@
   leaves concerns. Driven in its own session — or, optionally, summoned from the author's
   machine via `scripts/dual-agent-reviewer.sh prompt` (see the README).
 - **Autonomous by default:** `/dual-review` runs the whole loop unattended, ending at the
-  same human gate (see the README). `/dual-review-auto` is a deprecated alias for it.
+  same human gate (see the README).
 
 ## Status marker (the single coordination signal)
 

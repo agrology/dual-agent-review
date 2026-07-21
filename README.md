@@ -15,10 +15,9 @@ As a Claude Code plugin:
 
     /plugin install agrology/dual-agent-review
 
-This installs the `/dual-review` slash command and its supporting scripts (plus
-`/dual-review-auto`, a **deprecated** alias kept only for muscle memory — `/dual-review` is
-autonomous by default). It does **not** install the reviewer side — see "Reviewer setup"
-below, though note that the `fable` reviewer needs no setup at all.
+This installs the `/dual-review` slash command and its supporting scripts. It does **not**
+install the reviewer side — see "Reviewer setup" below, though note that the `fable` reviewer
+needs no setup at all.
 
 ## Reviewer setup (BYO reviewer)
 
@@ -139,7 +138,6 @@ billing. `fable` adds none. The manual route works with any of them.
 
 - `docs/dual-agent-review.md` — the protocol contract
 - `commands/dual-review.md` — the `/dual-review` author-mode command
-- `commands/dual-review-auto.md` — `/dual-review-auto`, a deprecated alias for `/dual-review`
 - `.claude-plugin/plugin.json` — the Claude Code plugin manifest
 - `.agents/skills/dual-review/` — the self-contained `/dual-review` reviewer skill, needed **only** for the `codex` provider (`fable`/`gemini` are pointed at the protocol by their prompt)
   (bundled copies of the protocol doc + reviewer scripts; not installed by the plugin — see
@@ -310,9 +308,6 @@ the `codex:codex-rescue` agent's Claude `sonnet` wrapper answer instead of a GPT
 If the chosen provider isn't available (e.g. the Codex CLI isn't installed or authenticated),
 the command announces the reason and degrades to the attended, manual-handoff flow rather than
 failing silently.
-
-`/dual-review-auto` is now a **deprecated alias** for `/dual-review` — it forwards to the same
-command and behavior described here.
 
 Safety — two different failures, handled two different ways, deliberately:
 

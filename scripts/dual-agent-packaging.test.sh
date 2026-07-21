@@ -22,19 +22,20 @@ fi
 
 # --- commands relocated, old dir gone ---
 [[ -f "${ROOT}/commands/dual-review.md" ]]      && ok "commands/dual-review.md present"      || bad "commands/dual-review.md missing"
-[[ -f "${ROOT}/commands/dual-review-auto.md" ]] && ok "commands/dual-review-auto.md present" || bad "commands/dual-review-auto.md missing"
+[[ ! -e "${ROOT}/commands/dual-review-auto.md" ]] && ok "commands/dual-review-auto.md removed (autonomous is the default)" \
+  || bad "commands/dual-review-auto.md still present"
 [[ ! -d "${ROOT}/.claude/commands" ]]           && ok ".claude/commands removed"             || bad ".claude/commands still present (must be single-source)"
 
 # --- no BARE script refs remain in command markdown ---
-for f in "${ROOT}"/commands/dual-review.md "${ROOT}"/commands/dual-review-auto.md; do
-  [[ -f "$f" ]] || continue
+f="${ROOT}/commands/dual-review.md"
+if [[ -f "$f" ]]; then
   if grep -nE '(^|[^/A-Za-z_])scripts/dual-agent-[a-z-]+\.sh' "$f" \
        | grep -vq 'CLAUDE_PLUGIN_ROOT'; then
     bad "bare scripts/ ref (no \${CLAUDE_PLUGIN_ROOT}) in $(basename "$f")"
   else
     ok "no bare scripts/ refs in $(basename "$f")"
   fi
-done
+fi
 
 # --- scripts self-locate from a FOREIGN cwd (spec §2 regression guard for the plugin move) ---
 tmpcwd="$(mktemp -d)"
@@ -133,15 +134,16 @@ if [[ -f "$DR" ]]; then
   fi
 fi
 
-# --- /dual-review-auto is a deprecated alias, not a second implementation ---
-DA="${ROOT}/commands/dual-review-auto.md"
-if [[ -f "$DA" ]]; then
-  grep -qi 'deprecated' "$DA" && ok "dual-review-auto.md is marked deprecated" \
-    || bad "dual-review-auto.md is not marked deprecated"
-  [[ "$(wc -l < "$DA")" -lt 30 ]] && ok "dual-review-auto.md is a thin alias" \
-    || bad "dual-review-auto.md still carries a full duplicate implementation"
-  grep -q 'dual-review.md' "$DA" && ok "dual-review-auto.md defers to dual-review.md" \
-    || bad "dual-review-auto.md does not defer to dual-review.md"
-fi
+# --- no dangling references to the removed /dual-review-auto command ---
+# Removing a command is only done when nothing still points at it; a stale pointer in the
+# protocol contract is worse than the command itself, since that file ships to reviewer agents.
+# Scans TRACKED files only: docs/plans and docs/specs are gitignored design history that
+# legitimately records the command as it was, and rewriting that history would falsify the
+# record rather than fix a pointer.
+hits="$( cd "$ROOT" && git ls-files -z 2>/dev/null \
+         | xargs -0 grep -l "dual-review-auto" 2>/dev/null \
+         | grep -v '^scripts/dual-agent-packaging.test.sh$' || true )"
+[[ -z "$hits" ]] && ok "no dangling /dual-review-auto references in tracked files" \
+  || bad "stale /dual-review-auto references in: ${hits//$'\n'/ }"
 
 echo "packaging: $fails failure(s)"; [[ $fails -eq 0 ]]
