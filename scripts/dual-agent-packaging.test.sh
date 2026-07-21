@@ -67,6 +67,31 @@ if [[ -f "$DR" ]]; then
     || bad "§2 awaiting-reviewer branch does not defer to §2.5 before arming"
 fi
 
+# --- Finding 1: --reviewer/--attended are actually PARSED, not just documented ---
+if [[ -f "$DR" ]]; then
+  sec1="$(awk '/^## 1\. Resolve the argument/{flag=1} flag{print} flag && /^## 2\. Arm/{exit}' "$DR")"
+  if echo "$sec1" | grep -q -- '--reviewer <id>' && echo "$sec1" | grep -q -- '--attended'; then
+    ok "§1 splits --reviewer/--attended out of \$ARGUMENTS"
+  else
+    bad "§1 does not document splitting --reviewer/--attended out of \$ARGUMENTS"
+  fi
+  # PR classification must run on the extracted positional, never the raw $ARGUMENTS (a
+  # trailing --reviewer/--attended must not corrupt PR-ref matching).
+  echo "$sec1" | grep -qF 'dual-agent-pr.sh parse "<positional>"' \
+    && ok "PR classification runs on the positional, not raw \$ARGUMENTS" \
+    || bad "PR classification does not run on <positional>"
+  grep -qF 'dual-agent-pr.sh parse "$ARGUMENTS"' "$DR" \
+    && bad "PR classification still runs on the raw \$ARGUMENTS" \
+    || ok "no PR classification call runs on the raw \$ARGUMENTS"
+
+  # §2.5 must forward the extracted --reviewer flag to `resolve` (joined across line wraps —
+  # this is prose, not a shell command, so the flag and the call may wrap onto separate lines).
+  sec25="$(awk '/^## 2\.5 Resolve the route/{flag=1} flag{print} flag && /^## 3\. On each wake/{exit}' "$DR")"
+  echo "$sec25" | tr '\n' ' ' | grep -qE 'reviewer\.sh resolve`, appending[^.]*--reviewer' \
+    && ok "§2.5 forwards --reviewer to resolve" \
+    || bad "§2.5 does not forward --reviewer to resolve"
+fi
+
 # --- the unattended loop verifies reviewer identity BEFORE validating transitions ---
 if [[ -f "$DR" ]]; then
   grep -q 'verify-vendor' "$DR" && ok "dual-review.md runs verify-vendor" \
