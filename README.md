@@ -72,6 +72,13 @@ relative path breaks when the reviewer's session opens in a different checkout.
   `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
   write access to the repo. Same protocol, same human gate.
 
+  > **Unverified.** The `gemini` provider is implemented and unit-tested, but no end-to-end
+  > review has been driven through a real `gemini` CLI — it was not installed on the machine
+  > where this shipped. Treat the Gemini route as untested until you have run one review with
+  > it. In particular, unattended Gemini review needs the CLI to permit file writes without
+  > interactive approval; if yours does not, use the manual route above. The `codex` and
+  > `fable` routes do not carry this caveat.
+
 **Write access is a trust contract, not a sandbox.** Any reviewer needs write access to the
 doc to append findings and flip the marker. The "read only that document" scope limit is
 carried in the prompt and relies on the reviewer honouring it — it is not enforced by a
