@@ -74,12 +74,27 @@ relative path breaks when the reviewer's session opens in a different checkout.
   `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
   write access to the repo. Same protocol, same human gate.
 
-  > **Unverified.** The `gemini` provider is implemented and unit-tested, but no end-to-end
-  > review has been driven through a real `gemini` CLI — it was not installed on the machine
-  > where this shipped. Treat the Gemini route as untested until you have run one review with
-  > it. In particular, unattended Gemini review needs the CLI to permit file writes without
-  > interactive approval; if yours does not, use the manual route above. The `codex` and
-  > `fable` routes do not carry this caveat.
+  > **Not verified end to end — known blockers.** The `gemini` provider is implemented and
+  > unit-tested, and dispatch was exercised against a real `gemini` CLI (v0.51.0), but no
+  > review has yet run to completion. What we hit, so you don't rediscover it:
+  >
+  > 1. **Gemini CLI honours `.gitignore` when reading files.** A review doc that is gitignored
+  >    cannot be read by the reviewer at all — it fails with *"is ignored by configured ignore
+  >    patterns"*. This makes **PR mode incompatible with the `gemini` provider today**, because
+  >    PR scratch files live under `.dual-agent/reviews/`, which is gitignored by design. It also
+  >    bites local docs if your repo gitignores `docs/specs`/`docs/plans`.
+  > 2. **The CLI must be able to run in the directory.** Outside a trusted folder it exits 55
+  >    until you trust the workspace interactively, or set `GEMINI_CLI_TRUST_WORKSPACE=true`.
+  >    This tool deliberately does **not** pass `--skip-trust` for you — trusted folders are a
+  >    safety control against repo content driving the agent, and disabling it is your decision.
+  > 3. **Auth must be in the environment.** A key in `~/.gemini/.env` was not picked up for
+  >    `gemini -p` in our testing; exporting `GEMINI_API_KEY` worked.
+  > 4. **Free-tier quota is small** (5 requests/day on the default flash model at time of
+  >    writing), which a multi-round review will exhaust quickly.
+  >
+  > Failure is clean when it happens: the doc is left untouched, the marker is not flipped, and
+  > the autonomous route degrades to the manual flow with the reason stated. The `codex` and
+  > `fable` routes carry none of these caveats and are verified end to end.
 
 **Write access is a trust contract, not a sandbox.** Any reviewer needs write access to the
 doc to append findings and flip the marker. The "read only that document" scope limit is
