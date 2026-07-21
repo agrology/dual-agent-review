@@ -32,6 +32,29 @@ Copy the skill directory from this repo (`.agents/skills/dual-review/`) into you
 same relative path, then run Codex **from your repo's root** so the bundled paths resolve.
 See "Usage (file-coordination)" below for how the two sides then converge.
 
+### Choosing the reviewer model
+
+The reviewer defaults to **Codex/GPT**. To use a different one, set `DUAL_AGENT_REVIEWER`:
+
+| value | reviewer | needs |
+|---|---|---|
+| `codex` *(default)* | Codex/GPT via the local Codex CLI | `codex` on PATH, authenticated |
+| `fable` | Claude Fable 5 as a subagent | nothing — runs in-harness |
+| `gemini` | Gemini via the `gemini` CLI | `gemini` on PATH, authenticated |
+
+```bash
+export DUAL_AGENT_REVIEWER=fable
+```
+
+`DUAL_AGENT_REVIEWER_MODEL` optionally pins a specific model for CLI-backed providers.
+
+**Independence tiers.** A cross-vendor reviewer (`codex`, `gemini`) gives *architectural*
+independence: different vendor, different model family, separate reasoning. A same-vendor
+reviewer (`fable`) gives fresh context and different weights, but shares a training lineage
+with the Claude author — real value, weaker claim. The tool prints a note at the human gate
+when author and reviewer share a vendor, so the distinction is visible when you are deciding,
+not buried here.
+
 ## Layout
 
 - `docs/dual-agent-review.md` — the protocol contract
