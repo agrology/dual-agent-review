@@ -104,13 +104,21 @@ billing. `fable` adds none. The manual route works with any of them.
 - `scripts/dual-agent-wait.sh` — lock-free bounded marker wait (reviewer-side resume)
 - `scripts/dual-agent-pr.sh` — PR-URL mode: ingest a GitHub PR into a local scratch file, then publish the converged review
 - `scripts/dual-agent-peer.sh` — symmetric peer-review grammar (mode detect, open-findings, convergence) for PR-mode docs
-- `scripts/dual-agent-reviewer.sh prompt` — optional: emits the `/codex:rescue` reviewer prompt for the Codex-plugin route
+- `scripts/dual-agent-reviewer.sh` — the reviewer **provider registry**: which provider is
+  selected (`resolve`), whether it's dispatchable (`check`), its reviewer prompt (`prompt`) and
+  shell dispatch command (`command`), the same-vendor independence notice (`notice`), and
+  post-turn reviewer-identity verification (`verify-vendor`)
 - `scripts/dual-agent-auto-step.sh` — per-round verdict (continue/terminal/stop) for the autonomous loop
 - `scripts/dual-agent-build-reviewer-bundle.sh` — regenerates the bundled reviewer skill from the canonical sources
 - `scripts/dual-agent-history-check.sh` — scans the full git history for internal/sensitive terms; the pre-publish safety gate (see `PUBLISHING.md`)
 - `PUBLISHING.md` — how to take a fork/clone of this repo public safely (fresh-history export or history scrub)
 
-## Usage (file-coordination)
+## Usage (attended, two-session file-coordination)
+
+> **The unattended route is the default** — see "Autonomous review" below. This section
+> documents the **attended** flow: the manual, two-session handoff you get via `--attended`,
+> or when the unattended route degrades. The mechanics below (marker, watcher, absolute-path
+> rendezvous, worktree notes) are shared by both routes.
 
 > **Paths in the examples below** (`scripts/…`, `docs/specs/…`) assume you have this repo
 > cloned. Installed as a **plugin**, you don't run the scripts yourself — the `/dual-review`
@@ -119,7 +127,7 @@ billing. `fable` adds none. The manual route works with any of them.
 
 In your Claude session:
 
-    /dual-review docs/specs/2026-06-09-my-feature.md
+    /dual-review docs/specs/2026-06-09-my-feature.md --attended
 
 Claude arms author mode (inserts the status marker, starts a watcher) and waits. In a second
 Codex/GPT session rooted in **your** repo (with the reviewer skill installed per **Reviewer

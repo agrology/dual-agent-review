@@ -1,5 +1,6 @@
 *.dual-agent-review.log
 *.dual-agent-watch.lock/
+*.baseline
 .DS_Store
 .dual-agent/
 
