@@ -7,6 +7,10 @@
 # Exit: 0 ok, 1 check/verify failure, 2 usage.
 set -uo pipefail
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${DIR}/.." && pwd)"
+PROTOCOL="${ROOT}/.agents/skills/dual-review/protocol/dual-agent-review.md"
+
 die() { echo "dual-agent-reviewer: $1" >&2; exit "$2"; }
 
 # --- registry -------------------------------------------------------------
@@ -80,11 +84,79 @@ cmd_check() { # [--reviewer <id>] -> 0 dispatchable, 1 with reason
   return 0
 }
 
+abs_path() { # <path> -> canonical absolute path, or die 2
+  local d b
+  d="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" || die "cannot resolve doc path: $1" 2
+  b="$(basename "$1")"
+  echo "${d}/${b}"
+}
+
+# The opening paragraph is the ONLY provider-dependent part of the prompt. Skill-bearing
+# reviewers are pointed at their skill; skill-less ones get an actionable read-then-detect
+# instruction, because a bare path leaves them nothing to act on. Mode detection itself stays
+# single-sourced in the protocol file and is never restated here.
+prompt_head() { # <has-skill>
+  if [[ "$1" == "yes" ]]; then
+    cat <<'HEAD'
+You are the external reviewer in this repo's dual-agent review. Use your dual-review skill
+(it reads docs/dual-agent-review.md and detects asymmetric vs peer-review mode itself).
+HEAD
+  else
+    cat <<HEAD
+You are the external reviewer in this repo's dual-agent review.
+
+Before editing anything, read the protocol contract in full:
+  ${PROTOCOL}
+It defines the review modes. Determine which mode this document is in by reading its
+header marker, and follow that mode's grammar for the rest of this turn.
+HEAD
+  fi
+}
+
+emit_prompt() { # <abs-doc-path> <has-skill>
+  local abs="$1" has_skill="$2" authority
+  # Who defines the mode grammar for this reviewer. Saying "your skill" to a skill-less
+  # reviewer contradicts the head block, which just told it to read the protocol file.
+  # The codex wording is byte-frozen; only the skill-less variant differs.
+  if [[ "$has_skill" == "yes" ]]; then
+    authority="the protocol your skill defines"
+  else
+    authority="the protocol contract you just read"
+  fi
+  prompt_head "$has_skill"
+  cat <<PROMPT
+
+Review EXACTLY this document — its canonical absolute path:
+  ${abs}
+
+Do ONE reviewer turn, following ${authority} for the doc's mode. Leave your
+concerns/findings as the protocol prescribes, each with a required \`> — via <your-model-id>\`
+disclosure line. In peer-review (PR) mode every finding also needs an inline severity tag
+(\`high\`, \`med\`, or \`low\` in the finding id) and a required \`> — risk: <short risk>\` line,
+kept terse. Flip the status marker as your FINAL edit (the flip is the handoff).
+
+Read only that document. Do not implement, commit, or open a PR — stop at the human gate.
+Then stop and report which ids you added and that the marker was flipped.
+PROMPT
+}
+
+cmd_prompt() { # <doc> [--reviewer <id>]
+  local doc="${1:-}"
+  [[ -n "$doc" ]] || die "usage: dual-agent-reviewer.sh prompt <doc-path> [--reviewer <id>]" 2
+  shift
+  [[ -f "$doc" ]] || die "doc not found: $doc" 2
+  local row has_skill
+  row="$(resolve_row "$@")" || exit 2
+  has_skill="$(field "$row" 5)"
+  emit_prompt "$(abs_path "$doc")" "$has_skill"
+}
+
 # --- dispatch -------------------------------------------------------------
 sub="${1:-}"; [[ -n "$sub" ]] || die "usage: dual-agent-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor> [args]" 2
 shift
 case "$sub" in
   resolve) cmd_resolve "$@" ;;
   check)   cmd_check "$@" ;;
+  prompt)  cmd_prompt "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
 esac

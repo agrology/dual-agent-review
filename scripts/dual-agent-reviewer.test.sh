@@ -105,6 +105,65 @@ PATH="${FAKE}:$PATH" bash "$SUT" check --reviewer gemini >/dev/null 2>&1; rc=$?
 bash "$SUT" check --reviewer nope >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "check with unknown provider exits 2" || bad "check unknown rc=$rc (want 2)"
 
+# --- prompt: codex output is BYTE-IDENTICAL to the pre-change emitter ---
+D="$(mkdoc spec.md awaiting-reviewer)"
+new="$(bash "$SUT" prompt "$D" --reviewer codex 2>/dev/null)"
+old="$(bash "${DIR}/dual-agent-codex-prompt.sh" "$D" 2>/dev/null)"
+[[ "$new" == "$old" ]] && ok "codex prompt is byte-identical to the old emitter" \
+  || { bad "codex prompt drifted from the old emitter"; diff <(echo "$old") <(echo "$new") | head -20; }
+
+# --- prompt: the canonical ABSOLUTE path is the rendezvous, for every provider ---
+abs="$(cd "$(dirname "$D")" && pwd -P)/$(basename "$D")"
+for p in codex fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  grep -qF "$abs" <<<"$out" && ok "prompt($p) carries the absolute doc path" \
+    || bad "prompt($p) missing the absolute doc path"
+done
+
+# --- prompt: skill-bearing provider points at the skill; skill-less ones do NOT ---
+out="$(bash "$SUT" prompt "$D" --reviewer codex 2>/dev/null)"
+grep -qi 'dual-review skill' <<<"$out" && ok "codex prompt references its skill" || bad "codex skill reference missing"
+
+# --- prompt: skill-less providers get an ACTIONABLE read-then-detect instruction, ---
+# --- not merely a path (a bare path would satisfy a substring check and be useless) ---
+for p in fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  grep -qiE 'read the protocol contract in full' <<<"$out" \
+    && ok "prompt($p) instructs reading the protocol" || bad "prompt($p) lacks the read instruction"
+  grep -qiE 'determine which mode' <<<"$out" \
+    && ok "prompt($p) instructs mode detection" || bad "prompt($p) lacks the mode-detect instruction"
+  grep -qF 'protocol/dual-agent-review.md' <<<"$out" \
+    && ok "prompt($p) names the protocol file" || bad "prompt($p) lacks the protocol path"
+  # No reference to a skill ANYWHERE in a skill-less prompt — not just the exact phrase
+  # "dual-review skill". The shared body used to say "the protocol your skill defines",
+  # which a narrower check would have missed while the reviewer got contradictory orders.
+  # Word-boundary match (not a bare substring): the real bundled protocol doc necessarily
+  # lives under .agents/skills/dual-review/... (Claude Code's skill-discovery layout), so a
+  # bare 'skill' substring check would false-positive on that legitimate path segment while
+  # still catching any actual prose reference such as "your skill" or "skill-less".
+  ! grep -qiE '\bskill\b' <<<"$out" \
+    && ok "prompt($p) contains no skill reference at all" || bad "prompt($p) still mentions a skill it lacks"
+  grep -qi 'protocol contract you just read' <<<"$out" \
+    && ok "prompt($p) points the reviewer at the contract it was told to read" \
+    || bad "prompt($p) does not name the protocol contract as the mode authority"
+done
+
+# --- prompt: never hardcodes mode-specific grammar (mode detection stays single-sourced) ---
+for p in codex fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  ! grep -qF '[reviewer:' <<<"$out" && ! grep -qF '[concur:' <<<"$out" \
+    && ok "prompt($p) does not hardcode mode grammar" || bad "prompt($p) hardcodes mode grammar"
+done
+
+# --- prompt: usage errors and read-only guarantee ---
+bash "$SUT" prompt >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "prompt with no doc exits 2" || bad "prompt no-arg rc=$rc (want 2)"
+bash "$SUT" prompt "${WORK}/nope.md" >/dev/null 2>&1; rc=$?
+[[ "$rc" == 2 ]] && ok "prompt with a missing doc exits 2" || bad "prompt missing-doc rc=$rc (want 2)"
+before="$(cat "$D")"
+bash "$SUT" prompt "$D" --reviewer gemini >/dev/null 2>&1
+[[ "$(cat "$D")" == "$before" ]] && ok "prompt does not touch the doc" || bad "prompt modified the doc"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
