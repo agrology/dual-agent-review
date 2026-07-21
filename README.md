@@ -46,9 +46,19 @@ The reviewer defaults to **Codex/GPT**. To use a different one, set `DUAL_AGENT_
 export DUAL_AGENT_REVIEWER=fable
 ```
 
-`DUAL_AGENT_REVIEWER_MODEL` optionally pins a specific model for the `gemini` provider.
-`codex` is deliberately pinned to `gpt-5.5` and ignores this variable, so an unset model
-cannot silently downgrade the reviewer to its Claude wrapper.
+**Which model each provider runs.** Defaults prefer a *provider-published* alias over a version
+pinned in this repo, so a new release is picked up without a code change:
+
+| provider | default model | why |
+|---|---|---|
+| `codex` | `gpt-5.5` | OpenAI publishes no "latest" alias, so a named default is unavoidable. It must be non-empty — an unset model lets the `codex:codex-rescue` wrapper answer as Claude. |
+| `fable` | `fable` | Already an alias the harness resolves; no version here to go stale. |
+| `gemini` | `gemini-pro-latest` | Google's own alias for the current top Pro tier. Without an explicit `-m` the CLI falls back to the cheaper *flash* tier, which is a weaker reviewer. |
+
+`DUAL_AGENT_REVIEWER_MODEL` overrides the default for whichever provider is selected — nothing
+above is unoverridable. It names a model, not a provider, so if you switch providers you will
+usually want to unset it. Whatever model runs, `verify-vendor` still checks that the id it
+discloses belongs to the selected provider's vendor.
 
 **Independence tiers.** A cross-vendor reviewer (`codex`, `gemini`) gives *architectural*
 independence: different vendor, different model family, separate reasoning. A same-vendor
