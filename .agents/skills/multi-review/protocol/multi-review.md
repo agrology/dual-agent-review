@@ -136,6 +136,5 @@ and present the annotated doc; a **human approves** before any implementation or
 
 ## Supersedes
 
-The earlier subprocess/exit-code protocol (`docs/specs/2026-06-08-multi-review-design.md`)
-is superseded for interactive use by the file-coordination model
-(`docs/specs/2026-06-09-frictionless-multi-review-design.md`).
+The earlier subprocess/exit-code protocol is superseded for interactive use by the
+file-coordination model.
