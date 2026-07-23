@@ -154,6 +154,65 @@ grep -q '^<!-- star-quarantined: gemini · identity-fail · round 1 -->$' "$BASE
 # in-doc human-readable mirror
 grep -q '<!-- star-findings: .*codex-rd1-r1=' "$BASE2" && ok "merge: in-doc manifest mirror" || bad "merge mirror"
 
+# --- check-converged ---
+mkconv() {  # -> a merged doc with primary responses + converged marker + manifest
+  local base="${WORK}/$1"
+  { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/2 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$base"
+  mkcopy "${base}.codex" '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+  bash "$SUT" merge --round 1 "$base" "${base}.codex" >/dev/null 2>&1
+  # primary responds + converge
+  { echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; } >> "$base"
+  # flip marker to converged (author-side)
+  sed -i.bak 's/awaiting-primary/converged/' "$base" && rm -f "${base}.bak"
+  echo "$base"
+}
+
+# happy path: converged
+D="$(mkconv conv-ok.md)"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && ok "check-converged: coverage+integrity pass" || bad "check-converged happy"
+
+# missing response -> fail (delete the agree block)
+D="$(mkconv conv-noresp.md)"; grep -v 'agree:codex-rd1-r1' "$D" > "$D.x" && mv "$D.x" "$D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "no-response should fail" || ok "check-converged: missing response fails"
+
+# softened text (id intact) -> fail (r14)
+D="$(mkconv conv-soft.md)"; sed -i.bak 's/alpha/ALPHA-softened/' "$D" && rm -f "${D}.bak"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "softened text should fail" || ok "check-converged: softened text fails (r14)"
+
+# deleted finding block -> fail (r9)
+D="$(mkconv conv-del.md)"; grep -v 'finding:codex-rd1-r1' "$D" > "$D.x" && mv "$D.x" "$D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "erasure should fail" || ok "check-converged: erasure fails (r9)"
+
+# deleted quarantine record + its mirror, doc-only -> still fail (r16)
+Q="${WORK}/conv-q.md"
+{ echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/2 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$Q"
+mkcopy "${Q}.codex" '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+bash "$SUT" merge --round 1 --quarantined gemini:idfail "$Q" "${Q}.codex" >/dev/null 2>&1
+{ echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; } >> "$Q"
+sed -i.bak 's/awaiting-primary/converged/' "$Q" && rm -f "${Q}.bak"
+# converges WITH the quarantine intact
+bash "$SUT" check-converged "$Q" >/dev/null 2>&1 && ok "check-converged: converges with quarantine intact" || bad "check-converged q-intact"
+# tamper the quarantine REASON (record present but text changed) -> fail (r5)
+sed -i.bak 's/· idfail ·/· benign-reason ·/' "$Q" && rm -f "${Q}.bak"
+bash "$SUT" check-converged "$Q" >/dev/null 2>&1 && bad "tampered quarantine reason should fail" || ok "check-converged: tampered quarantine reason fails (r5)"
+# now delete the quarantine record from the doc only (manifest retains it)
+grep -v 'star-quarantined: gemini' "$Q" > "$Q.x" && mv "$Q.x" "$Q"
+bash "$SUT" check-converged "$Q" >/dev/null 2>&1 && bad "hidden quarantine should fail" || ok "check-converged: hidden quarantine fails (r15/r16)"
+
+# round-2 cumulative reproducibility: merge round 1, respond, merge round 2 (a second finding)
+# against the SAME doc so the manifest is cumulative, respond to it, converge, and assert the
+# stored hashes still reproduce on the final multi-round doc.
+D2="${WORK}/conv-r2.md"
+{ echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/3 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$D2"
+mkcopy "${D2}.codex" '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+bash "$SUT" merge --round 1 "$D2" "${D2}.codex" >/dev/null 2>&1
+{ echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; } >> "$D2"
+mkcopy "${D2}.codex" '> [finding:r1|med] beta-round2' '> — via gpt-5.5' '> — risk: rb'
+bash "$SUT" merge --round 2 "$D2" "${D2}.codex" >/dev/null 2>&1
+{ echo '> [agree:codex-rd2-r1]'; echo '> — via claude-opus-4-8'; } >> "$D2"
+sed -i.bak 's/awaiting-primary/converged/' "$D2" && rm -f "${D2}.bak"
+bash "$SUT" check-converged "$D2" >/dev/null 2>&1 && ok "check-converged: round-2 cumulative reproducibility passes" || bad "check-converged round-2 cumulative"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

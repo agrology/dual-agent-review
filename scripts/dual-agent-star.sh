@@ -326,6 +326,55 @@ cmd_merge() {
   printf '<!-- star-findings: %s; quarantined: %s -->\n' "${mirror% }" "${qmirror% }" >> "$doc"
 }
 
+cmd_check_converged() {
+  local doc="${1:?doc}" mstate t
+  [[ -f "$doc" ]] || die "doc not found: $doc" 1
+  [[ -f "${doc}.manifest" ]] || exit 1     # no manifest -> never merged -> not converged
+
+  # marker must be converged (delegate to core.sh's reader)
+  mstate="$("${STAR_DIR}/dual-agent-core.sh" marker "$doc" 2>/dev/null | awk '{print $1}')"
+  [[ "$mstate" == "converged" ]] || exit 1
+
+  # parse table (also enforces grammar); a contract violation -> not converged
+  t="$(_table "$doc")" || exit 1
+
+  # (a) coverage: every finding has exactly one response (state != open)
+  printf '%s\n' "$t" | awk -F'\t' '$3 == "open" { exit 1 }' || exit 1
+
+  # (b) id-set: present finding ns-ids == manifest finding ns-ids
+  local present manifest_ids
+  present="$(printf '%s\n' "$t" | awk -F'\t' 'NF{print $1}' | sort -u)"
+  manifest_ids="$(awk '$1=="finding"{sub(/=.*/,"",$2); print $2}' "${doc}.manifest" | sort -u)"
+  [[ "$present" == "$manifest_ids" ]] || exit 1
+
+  # (c) content: each present finding block hash == manifest hash (r14)
+  local id want got
+  while IFS= read -r id; do
+    [[ -z "$id" ]] && continue
+    want="$(awk -v i="$id" '$1=="finding" && index($2, i"=")==1 {sub(/^[^=]*=/,"",$2); print $2}' "${doc}.manifest")"
+    got="$(finding_block_hash "$doc" "$id")"
+    [[ "$want" == "$got" ]] || exit 1
+  done <<< "$present"
+
+  # (d) quarantine: every manifest quarantine record must still be present in the doc AND its
+  #     content unchanged — hash the present record and compare to the manifest hash. Presence
+  #     alone (grep) is insufficient: the reason or round could be tampered without failing (r5).
+  #     Reads via process substitution so the while loop runs IN THIS shell (a pipe subshell
+  #     cannot set qmiss). Same newline-free hashing merge used (`printf '%s' | sha`).
+  local qentry qp qwant qline qgot qmiss=0
+  while IFS= read -r qentry; do
+    [[ -z "$qentry" ]] && continue
+    qp="${qentry%%=*}"; qwant="${qentry#*=}"
+    qline="$(grep -E "^<!-- star-quarantined: ${qp} · " "$doc" | head -1)"
+    [[ -n "$qline" ]] || { qmiss=1; break; }            # record deleted (r15/r16)
+    qgot="$(printf '%s' "$qline" | sha)"
+    [[ "$qwant" == "$qgot" ]] || { qmiss=1; break; }     # record text tampered (r5)
+  done < <(awk '$1=="quarantine"{print $2}' "${doc}.manifest")
+  [[ $qmiss -eq 0 ]] || exit 1
+
+  exit 0
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
@@ -334,6 +383,7 @@ main() {
     available) cmd_available "$@" ;;
     open-findings) cmd_open_findings "$@" ;;
     merge) cmd_merge "$@" ;;
+    check-converged) cmd_check_converged "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
