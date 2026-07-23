@@ -1,6 +1,6 @@
 ---
 description: Author-mode dual-agent review — watch a spec/plan doc and converge with an external reviewer, ending at a human gate.
-argument-hint: "[doc-path | PR-URL] [--reviewer <id>] [--attended]"
+argument-hint: "[doc-path | PR-URL] [--reviewer <id>] [--reviewers <csv>] [--attended]"
 ---
 
 You are the **author** in a dual-agent review. Drive it with the repo's shell helpers; you
@@ -12,6 +12,12 @@ own prose edits, the helpers own the marker. Never advance past the human gate.
 the doc path or PR ref, in any order, before or after the positional. Extract them:
 
 - `--reviewer <id>` — per-invocation reviewer override, consumed in §2.5.
+- `--reviewers <csv>` — a comma-separated reviewer-provider set (e.g. `codex,fable,gemini`),
+  consumed in §1.5. Naming this flag (or setting `DUAL_AGENT_REVIEWERS`) is what turns the run
+  into a **star** review (one primary — you — plus N independent secondaries); a single
+  `--reviewer <id>` (or nothing) is the ordinary one-reviewer path below. The two are
+  independent axes, not to be combined: if `--reviewers`/`DUAL_AGENT_REVIEWERS` resolves to a
+  non-empty set, it takes over and any `--reviewer` is ignored for this run.
 - `--attended` — selects the attended route directly, consumed in §2.5.
 
 Everything else is `<positional>` (empty if `$ARGUMENTS` was flags only, or absent entirely).
@@ -57,6 +63,164 @@ Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-pr.sh parse "<positional>"`.
   (default `docs/specs docs/plans`) whose names match `YYYY-MM-DD-…`. Pick the greatest by
   **date prefix, then filename** (NOT mtime). If there are zero candidates, or the top two
   share a date prefix (a tie), STOP and ask the engineer to pass an explicit path.
+
+## 1.5 Detect star mode (multi-secondary)
+
+Before arming anything, determine whether this is a **star** review (one primary — you — plus
+N independent secondaries) or the ordinary single-reviewer path below. This check MUST happen
+before §2: §2's `dual-agent-core.sh init` stamps an asymmetric round-1 marker onto any doc with
+none yet, and that shape is wrong for star — running it first would corrupt the doc before star
+ever gets a look.
+
+1. **Resume check (the doc's own header, checked first):** run
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh mode "<doc>"`.
+   - Prints `star` (exit 0) → `<doc>` is **already** a star review in flight from a prior
+     invocation (its header carries `<!-- dual-agent-mode: star -->`). Resuming without
+     `--reviewers`/`DUAL_AGENT_REVIEWERS` set must never silently fall back to the
+     single-reviewer path below. Read the `reviewers: <ids>` suffix off that same header line
+     and feed it straight back into `dual-agent-star.sh resolve-set --reviewers <ids,comma,
+     joined>` (same lookup as step 2 below, just doc-recorded input instead of the flag/env) to
+     rebuild the `id|vendor|kind|model|has-skill` rows. Go to §1.6.
+   - Exits 1 (no star hint in the header) → not yet star by the doc's own state; fall through
+     to step 2.
+2. **Fresh-request check:** run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh resolve-set`,
+   appending `--reviewers <csv>` when §1 extracted the flag (omit it entirely otherwise, so
+   `DUAL_AGENT_REVIEWERS` applies).
+   - **Exit 0** → a non-empty, resolved set — one `id|vendor|kind|model|has-skill` row per line.
+     This is a **star** review. Resolve the set **once**, here, and carry these rows through the
+     rest of the run (mirror §2.5's "resolve once" rule — do not call `resolve-set` again later
+     in this invocation). Go to §1.6.
+   - **Exit 3** → empty (no `--reviewers` flag and no `DUAL_AGENT_REVIEWERS`). Not a star review
+     — continue at §2 exactly as before; nothing in §1.6 applies to this run.
+   - **Any other exit** (an unknown provider id named in the set) → report the message and
+     STOP, same as an unknown `--reviewer` in §2.5.
+
+## 1.6 Star mode — fan-out, primary turn, and terminal gate
+
+You are the **primary** in a star review — the same author role as the rest of this command,
+just responding to N independent secondaries instead of one. This section is self-contained:
+once §1.5 sends you here, it owns arming, both marker states unique to star, and the terminal
+gate for this doc. §2 through §4 do not apply for the rest of this run.
+
+### Arm (idempotent)
+
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-egress-guard.sh "<doc>"`. Non-zero → report the
+  message and STOP — do not arm. Star gets no pass on this hard gate; it applies exactly as
+  in §2.
+- Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-core.sh marker "<doc>"`.
+  - **Succeeds** (a marker already exists) → this run is RESUMING a star review already armed.
+    Do not re-arm. Go straight to "Branch on the marker" below, using the CURRENT state.
+  - **Fails** (no marker yet) → fresh. Insert, right after the H1 (the same insertion point
+    `dual-agent-core.sh init` uses — but `init` only knows the asymmetric shape, round bound 10
+    and state `awaiting-reviewer`, so star's own two-line header is inserted directly instead):
+
+        <!-- dual-agent-review: awaiting-secondaries · round 1/2 -->
+        <!-- dual-agent-mode: star · reviewers: <ids> -->
+
+    `<ids>` is the resolved set's ids from §1.5, **space**-joined, in resolved order (e.g.
+    `codex fable`). The round bound is **2** for star, always — a secondary never responds to
+    another secondary's finding, so there is nothing to iterate beyond one primary pass per
+    round.
+  - **If `<doc>` has no `## Review` heading yet** (true the first time a fresh spec/plan doc
+    enters star review), append one now, with nothing under it. `merge` (used below) appends
+    namespaced findings after the LAST `## Review` heading in `<doc>` — a doc with none would
+    silently lose every merged finding.
+  - Tell the engineer: "star review armed on `<doc>` — secondaries: `<ids>`."
+
+### Branch on the marker (star states only)
+
+- **`awaiting-secondaries`** → run "Fan-out" below, then re-read the marker (now
+  `awaiting-primary`) and continue directly into "Primary turn" in the same invocation — unlike
+  the single-reviewer path, the primary IS this command, so there is no cross-session handoff
+  to wait on between these two states.
+- **`awaiting-primary`** → run "Primary turn" below.
+- **`converged`** → go to "Terminal gate" below.
+- **`exhausted`** → present the still-open findings
+  (`${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh open-findings "<doc>"`) and tell the
+  engineer: "round bound reached with findings still unaddressed — escalate to a human." STOP.
+  (In practice this should not occur — star's convergence is coverage-based, so the primary can
+  always converge once it has responded to every finding — but the state is honored
+  defensively in case a doc was hand-edited into it.)
+
+#### Fan-out (on `awaiting-secondaries`)
+
+1. **Snapshot the baseline.** Copy `<doc>` to `<doc>.baseline`. In that COPY ONLY, truncate
+   everything after the doc's LAST `## Review` heading — keep the heading line itself, drop
+   every line after it (any prior round's merged findings/responses). `<doc>` itself is
+   untouched by this step.
+2. **Seed one copy per provider**, using the SAME resolved set from §1.5/Arm — round 2 (if it
+   happens) does not shrink the set, even for a provider quarantined in round 1; it gets a
+   fresh independent copy again. For each id: `cp "<doc>.baseline" "<doc>.<id>"`, then rewrite
+   that copy's header to:
+
+        <!-- dual-agent-review: awaiting-reviewer · round <N>/2 -->
+        <!-- dual-agent-mode: star -->
+
+   (`<N>` is the star round this fan-out is running; no `reviewers:` suffix here — that
+   annotation belongs to `<doc>`, not the per-provider working copy.) The copy carries the
+   empty `## Review` heading from step 1; the secondary appends its findings beneath it.
+3. **Dispatch every secondary in the same turn**, so the harness runs them concurrently — never
+   one after another. Branch on `kind` exactly as §3.5 step 3.c does, pointed at `<doc>.<id>`
+   instead of `<doc>`: `codex` → the `codex:codex-rescue` agent with `--model <model> --write`;
+   `fable` → `general-purpose` with `model: fable`; `gemini` → the §3.5 NUL-argv shell loop,
+   launched as a background task so it does not block the rest of the batch. Both subagent
+   dispatches (`codex`, `fable`) go in the SAME response block as each other.
+4. **Bound the wait, per copy.**
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-wait.sh "<doc>.<id>" awaiting-author [seconds]`
+   (its own 240s default is a reasonable bound; raise it for a known-slow provider). Exit 0 →
+   proceed to verify below. Non-zero (bound hit, or the copy went sideways) → quarantine this
+   provider (next step) with that reason. A hung secondary must never stall the others or the
+   round.
+5. **Verify identity, per copy that reached `awaiting-author`.**
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh verify-vendor --baseline
+   "<doc>.baseline" "<doc>.<id>" --reviewer <id>`. Pass → admit the copy into the merge. Fail →
+   quarantine: exclude it from the merge and record `--quarantined <id>:<reason>` (the reason
+   is `verify-vendor`'s message, or "no response within the wait bound" from step 4).
+   - **All secondaries quarantined** → an **anomaly stop**: do not advance the marker; surface
+     every quarantine reason to the engineer and STOP. A round with zero trustworthy findings
+     cannot merge.
+6. **Merge.** `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh merge --round <N> [--quarantined
+   <id>:<reason> ...] "<doc>" <admitted copies...>` (`<N>` is the round number this marker
+   currently names — 1 or 2).
+7. **Flip the marker.** Edit `<doc>`'s marker from `awaiting-secondaries` to `awaiting-primary`,
+   same round number — your final edit of this step. (`core.sh next-marker` only knows the
+   asymmetric `author-done` event; this transition, like a secondary's own hand-back, is a
+   direct edit, not a helper call.) Retain `<doc>.<id>` for every provider, `<doc>.manifest`,
+   and `<doc>.baseline` — do not delete them yet. The terminal gate is what releases them.
+
+#### Primary turn (on `awaiting-primary`)
+
+1. List the merged findings awaiting a response:
+   `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh open-findings "<doc>"`.
+2. For each, append **exactly one** of:
+   - `> [agree:<ns-id>]` + `> — via <primary-model-id>` — accept it, and address it in the doc
+     body, or
+   - `> [dispute:<ns-id>] <one-line reason>` + `> — via <primary-model-id>` — reject it,
+     tersely.
+   Never the asymmetric `> [author: resolved:<id>]` — star's `check-converged` does not
+   recognize that form and would never see coverage as complete.
+3. Decide: **converge**, or — **at most once, and only when the current round is < 2** —
+   re-enter `awaiting-secondaries` for a second round (e.g. because addressing round 1's
+   findings changed the doc body enough to warrant a fresh independent pass). At round 2 this
+   choice is not available — converge; the round bound forces terminal. Edit the marker
+   directly:
+   - **Converge** → state word only: `awaiting-primary` → `converged` (same round number).
+   - **Round 2** → state AND round: `awaiting-primary · round 1/2` → `awaiting-secondaries ·
+     round 2/2`, then return to "Fan-out" above.
+
+### Terminal gate
+
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh check-converged "<doc>"`.
+
+- **Pass** → present `${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-star.sh gate-summary "<doc>"
+  "<primary-model-id>"` to the engineer and STOP — same human-gate discipline as §4: never
+  implement, commit, or open a PR from this command. Only once the engineer confirms the
+  review is done, remove the retained working files (`<doc>.<id>` for every provider,
+  `<doc>.manifest`, `<doc>.baseline`) — never before the gate, since the gate is presented FROM
+  them (`check-converged`/`gate-summary` read the manifest).
+- **Fail** → the marker says `converged` but the contract doesn't hold (e.g. a hand-edit broke
+  coverage, or tampered with a quarantine record) — pause, surface the inconsistency, and STOP.
+  Do not clean up the working files; they are what a human needs to diagnose the mismatch.
 
 ## 2. Arm
 
@@ -268,3 +432,7 @@ STOP at the gate. Never implement, commit, or open a PR from this command.
 - If the marker is missing/corrupt, or the doc changed while it said `awaiting-author`
   (a turn violation), pause and surface — do not race-edit.
 - Disclosure warnings on stderr are non-blocking; surface them at the gate but keep going.
+- Star mode (§1.6) does not use the watcher/lock pattern above — its two marker states
+  (`awaiting-secondaries`/`awaiting-primary`) are driven synchronously within one invocation,
+  since the primary is this command itself and the fan-out uses its own bounded wait
+  (`dual-agent-wait.sh`) per copy instead.
