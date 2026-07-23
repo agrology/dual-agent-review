@@ -5,7 +5,7 @@ repo is made public, all history must be clean of internal references.
 
 ## Gate (must pass)
 
-    bash scripts/dual-agent-history-check.sh .
+    bash scripts/multi-review-history-check.sh .
 
 Exit 0 = safe. Non-zero prints the offending commits/blobs — do not publish until clean.
 
@@ -22,7 +22,7 @@ Exit 0 = safe. Non-zero prints the offending commits/blobs — do not publish un
    terms from ALL refs, then re-run the gate:
 
        git filter-repo --path docs/specs --path docs/plans --path docs/superpowers \
-         --path .superpowers --path .dual-agent --invert-paths
-       bash scripts/dual-agent-history-check.sh .
+         --path .superpowers --path .multi-review --invert-paths
+       bash scripts/multi-review-history-check.sh .
 
 Only flip the GitHub repo to public after the gate passes.

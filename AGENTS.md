@@ -1,6 +1,6 @@
-# dual-agent-review — AGENTS.md
+# multi-review — AGENTS.md
 
-> This is the working agreement for `agrology/dual-agent-review`, an open-source project.
+> This is the working agreement for `agrology/multi-review`, an open-source project.
 > It defines the engineering standards this repo holds itself to. Repo-specific rules live
 > in a *separate* section at the bottom (`## 11`) — never mixed into the sections above it.
 >
@@ -243,7 +243,7 @@ verified) is enforced in practice.
   boundary" governs all AI-assisted work without exception — read-only sandbox scope or nothing.
 - Prefer asking the model to write the failing test first, then the implementation, and to give
   explicit success criteria it can loop against (§1.4).
-- **Dual-agent review** (`agrology/dual-agent-review`) is a sanctioned review mechanism: an
+- **Multi-review** (`agrology/multi-review`) is a sanctioned review mechanism: an
   author agent and an external reviewer agent converge through bounded rounds, always ending
   at a **human approval gate**. Use it for pre-implementation spec/plan design docs and for
   PR/code review (it supports diff-scoped review with inline comments, and an autonomous
@@ -307,23 +307,23 @@ verified) is enforced in practice.
 > Owned by this repository's maintainers; extends (never silently weakens) any section
 > above. Rationale for deviations is documented inline.
 
-### Dual-agent review (author role)
+### Multi-review (author role)
 
-This repo carries the author-mode command at `commands/dual-review.md`, invoked as
-`/dual-review [doc]`. Slash-command registries are indexed at session start, so the command
-can be missing from yours even though it exists — if `/dual-review` is reported unknown, do
-NOT conclude the command doesn't exist: read `commands/dual-review.md` and follow
-it directly. `/dual-review` is autonomous by default — it drives the whole loop unattended and
+This repo carries the author-mode command at `commands/multi-review.md`, invoked as
+`/multi-review [doc]`. Slash-command registries are indexed at session start, so the command
+can be missing from yours even though it exists — if `/multi-review` is reported unknown, do
+NOT conclude the command doesn't exist: read `commands/multi-review.md` and follow
+it directly. `/multi-review` is autonomous by default — it drives the whole loop unattended and
 degrades to the attended two-session flow when the selected reviewer provider cannot be
 dispatched.
 
-### Dual-agent review (reviewer role)
+### Multi-review (reviewer role)
 
-If you are asked to review a doc that is under a dual-agent review, read
-`docs/dual-agent-review.md` and follow it:
+If you are asked to review a doc that is under a multi-review review, read
+`docs/multi-review.md` and follow it:
 
-- In Codex, prefer the repo skill `/dual-review <doc>` for this workflow.
-- Act **only** when the marker `<!-- dual-agent-review: ... -->` says `awaiting-reviewer`.
+- In Codex, prefer the repo skill `/multi-review <doc>` for this workflow.
+- Act **only** when the marker `<!-- multi-review: ... -->` says `awaiting-reviewer`.
 - Leave concerns as `> [reviewer:<id>]` lines with **unique** ids, each followed by a
   required `> — via <your-model>` disclosure line.
 - **Flip the marker last:** after writing every concern, change `awaiting-reviewer` →
@@ -335,10 +335,10 @@ If you are asked to review a doc that is under a dual-agent review, read
   anything beyond the doc content without explicit authorization. **Exception (PR mode):** you
   may read the current bodies of repo files the doc's diff directly references, solely to check
   the change is self-consistent — a narrow local read, no whole-corpus sweeps; every finding
-  must still trace to a changed hunk (see "Scope" in `docs/dual-agent-review.md`).
-- For a PR-mode doc (header `<!-- dual-agent-mode: peer-review -->`), use the symmetric
+  must still trace to a changed hunk (see "Scope" in `docs/multi-review.md`).
+- For a PR-mode doc (header `<!-- multi-review-mode: peer-review -->`), use the symmetric
   peer-review grammar (`[finding:]`/`[concur:]`/`[dispute:]`/`[withdraw:]` with `> — via`
-  lines), not `[reviewer:]`/`[author: resolved:]`. See `docs/dual-agent-review.md`. You MAY
+  lines), not `[reviewer:]`/`[author: resolved:]`. See `docs/multi-review.md`. You MAY
   optionally anchor a finding to a specific changed line by adding a `> — at <path>:<line>`
   (or `<path>:<start>-<end>`) line immediately after that finding's `> — via` line, using
   RIGHT-side new-file line numbers. Only **agreed** anchored findings post inline; an anchor
@@ -347,13 +347,13 @@ If you are asked to review a doc that is under a dual-agent review, read
 ### How this repo applies the sections above
 
 - **Review mechanism:** this is a single-maintainer repo, so §6/§7's "≥1 approving GitHub
-  review, no self-merge" is unsatisfiable (GitHub forbids self-approval). The dual-agent
+  review, no self-merge" is unsatisfiable (GitHub forbids self-approval). The multi-review
   review gate plus the engineer's explicit merge decision is this repo's review mechanism.
   Small docs/chore changes may land directly on `main` at the maintainer's discretion;
   substantive changes go through a PR.
 - **Test gate:** the verification gate is `for t in scripts/*.test.sh; do bash "$t"; done`
-  plus `shellcheck --severity=warning scripts/dual-agent-*.sh`. A line-coverage percentage
+  plus `shellcheck --severity=warning scripts/multi-review-*.sh`. A line-coverage percentage
   is not meaningful for this bash test suite.
 - **AI disclosure form:** inside review docs, agent comments disclose via the protocol's
-  `> — via <model>` continuation lines (see `docs/dual-agent-review.md`) rather than the
+  `> — via <model>` continuation lines (see `docs/multi-review.md`) rather than the
   baseline's banner format; same norm, doc-native shape.

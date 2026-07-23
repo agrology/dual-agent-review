@@ -1,15 +1,15 @@
-*.dual-agent-review.log
-*.dual-agent-watch.lock/
+*.multi-review.log
+*.multi-review-watch.lock/
 *.baseline
 .DS_Store
-.dual-agent/
+.multi-review/
 
 # Internal design history — excluded from the public repo
 /docs/specs/
 /docs/plans/
 /docs/superpowers/
 /.superpowers/
-/.dual-agent/
+/.multi-review/
 
 # Local Gemini CLI settings — a per-user prerequisite, not repo policy (see README)
 .gemini/
