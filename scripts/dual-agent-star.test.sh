@@ -145,7 +145,7 @@ bash "$SUT" merge --round 1 --quarantined gemini:identity-fail "$BASE2" "${BASE2
 # out-of-band manifest exists and lists the finding + quarantine
 [[ -f "${BASE2}.manifest" ]] && ok "merge: out-of-band manifest written" || bad "merge no manifest file"
 grep -q 'codex-rd1-r1=' "${BASE2}.manifest" && ok "merge: manifest binds finding hash" || bad "merge manifest finding"
-grep -q 'gemini=' "${BASE2}.manifest" && ok "merge: manifest binds quarantine hash" || bad "merge manifest quarantine"
+grep -q 'gemini-rd1=' "${BASE2}.manifest" && ok "merge: manifest binds quarantine hash" || bad "merge manifest quarantine"
 
 # durable quarantine record in the doc
 grep -q '^<!-- star-quarantined: gemini · identity-fail · round 1 -->$' "$BASE2" && ok "merge: durable quarantine record" || bad "merge quarantine record"
@@ -278,6 +278,23 @@ bash "$SUT" merge --round 2 "$D2" "${D2}.codex" >/dev/null 2>&1
 { echo '> [agree:codex-rd2-r1]'; echo '> — via claude-opus-4-8'; } >> "$D2"
 sed -i.bak 's/awaiting-primary/converged/' "$D2" && rm -f "${D2}.bak"
 bash "$SUT" check-converged "$D2" >/dev/null 2>&1 && ok "check-converged: round-2 cumulative reproducibility passes" || bad "check-converged round-2 cumulative"
+
+# --- round-qualified quarantine key: SAME provider quarantined in round 1 AND round 2 ---
+# The durable in-doc record is round-qualified ("round ${N}"), so the manifest key must be
+# too — a provider-only key would collide across rounds (the guard would keep re-matching
+# round 1's record for round 2's manifest entry, and a valid converged review would wrongly
+# fail). gemini is quarantined in both rounds with different reasons so the two in-doc
+# records (and hashes) differ.
+D3="${WORK}/conv-quarantine-r2.md"
+{ echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/3 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$D3"
+mkcopy "${D3}.codex" '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+bash "$SUT" merge --round 1 --quarantined gemini:round1-reason "$D3" "${D3}.codex" >/dev/null 2>&1
+{ echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; } >> "$D3"
+mkcopy "${D3}.codex" '> [finding:r1|med] beta-round2' '> — via gpt-5.5' '> — risk: rb'
+bash "$SUT" merge --round 2 --quarantined gemini:round2-reason "$D3" "${D3}.codex" >/dev/null 2>&1
+{ echo '> [agree:codex-rd2-r1]'; echo '> — via claude-opus-4-8'; } >> "$D3"
+sed -i.bak 's/awaiting-primary/converged/' "$D3" && rm -f "${D3}.bak"
+bash "$SUT" check-converged "$D3" >/dev/null 2>&1 && ok "check-converged: same provider quarantined both rounds passes" || bad "check-converged: repeat-quarantine same provider (round-qualify bug)"
 
 # --- gate-summary ---
 G="${WORK}/gate.md"

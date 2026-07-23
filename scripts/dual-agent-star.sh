@@ -310,14 +310,17 @@ cmd_merge() {
     mirror="${mirror}${line} "
   done
 
-  # quarantine records (durable in-doc) + manifest binding
+  # quarantine records (durable in-doc) + manifest binding. Manifest key is round-qualified
+  # (<provider>-rd<round>): the durable in-doc record already is ("round ${round}"), and the
+  # SAME provider can be quarantined in more than one round, each with its own record — a
+  # provider-only key would collide across rounds in guard (d) (see cmd_check_converged).
   local qprovider qreason qmirror=""
   for q in "${quarantined[@]:-}"; do
     [[ -z "$q" ]] && continue
     qprovider="${q%%:*}"; qreason="${q#*:}"
     qline="<!-- star-quarantined: ${qprovider} · ${qreason} · round ${round} -->"
     printf '%s\n' "$qline" >> "$doc"           # durable record
-    echo "quarantine ${qprovider}=$(printf '%s' "$qline" | sha)" >> "${doc}.manifest.tmp"
+    echo "quarantine ${qprovider}-rd${round}=$(printf '%s' "$qline" | sha)" >> "${doc}.manifest.tmp"
     qmirror="${qmirror}${qprovider}=$(printf '%s' "$qline" | sha) "
   done
   mv "${doc}.manifest.tmp" "${doc}.manifest"
@@ -359,13 +362,17 @@ cmd_check_converged() {
   # (d) quarantine: every manifest quarantine record must still be present in the doc AND its
   #     content unchanged — hash the present record and compare to the manifest hash. Presence
   #     alone (grep) is insufficient: the reason or round could be tampered without failing (r5).
+  #     The manifest key is round-qualified (<provider>-rd<round>) since the same provider can
+  #     be quarantined in more than one round — split the key back into provider/round so we
+  #     grep THAT round's specific record, not just the first record for the provider.
   #     Reads via process substitution so the while loop runs IN THIS shell (a pipe subshell
   #     cannot set qmiss). Same newline-free hashing merge used (`printf '%s' | sha`).
-  local qentry qp qwant qline qgot qmiss=0
+  local qentry qkey qp qround qwant qline qgot qmiss=0
   while IFS= read -r qentry; do
     [[ -z "$qentry" ]] && continue
-    qp="${qentry%%=*}"; qwant="${qentry#*=}"
-    qline="$(grep -E "^<!-- star-quarantined: ${qp} · " "$doc" | head -1)"
+    qkey="${qentry%%=*}"; qwant="${qentry#*=}"
+    qp="${qkey%-rd*}"; qround="${qkey##*-rd}"
+    qline="$(grep -E "^<!-- star-quarantined: ${qp} · .* · round ${qround} -->$" "$doc" | head -1)"
     [[ -n "$qline" ]] || { qmiss=1; break; }            # record deleted (r15/r16)
     qgot="$(printf '%s' "$qline" | sha)"
     [[ "$qwant" == "$qgot" ]] || { qmiss=1; break; }     # record text tampered (r5)

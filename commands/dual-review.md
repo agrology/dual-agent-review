@@ -199,6 +199,11 @@ gate for this doc. §2 through §4 do not apply for the rest of this run.
      tersely.
    Never the asymmetric `> [author: resolved:<id>]` — star's `check-converged` does not
    recognize that form and would never see coverage as complete.
+
+   Caution: `<primary-model-id>` must differ from every secondary's disclosed `> — via` model
+   id — the self-response guard fails a response whose model equals the finding's raiser model,
+   so colliding with a secondary (e.g. a Claude-family secondary like `fable`) would make
+   convergence impossible.
 3. Decide: **converge**, or — **at most once, and only when the current round is < 2** —
    re-enter `awaiting-secondaries` for a second round (e.g. because addressing round 1's
    findings changed the doc body enough to warrant a fresh independent pass). At round 2 this

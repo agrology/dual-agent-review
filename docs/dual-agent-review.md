@@ -98,6 +98,12 @@ which star's `check-converged` ignores (using it would loop forever, never conve
 Convergence is **coverage, not consensus**: every merged finding needs exactly one `agree`/`dispute`;
 disputes are expected and do not block. The human gate settles disputes.
 
+**Model-id distinctness:** every secondary and the primary must disclose their own *real* model
+id on `> — via <model>`. The primary's disclosed id must differ from every secondary's — the
+self-response guard fails a response whose model equals the finding's raiser model, so a
+Claude-family secondary (e.g. `fable`) colliding with a Claude primary id would make convergence
+impossible.
+
 ## Turn-taking discipline
 
 - **Reviewer:** write all concerns first, then flip `awaiting-reviewer` → `awaiting-author`
