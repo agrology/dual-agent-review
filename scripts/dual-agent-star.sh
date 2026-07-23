@@ -375,6 +375,45 @@ cmd_check_converged() {
   exit 0
 }
 
+cmd_gate_summary() {
+  local doc="${1:?doc}" primary="${2:?primary-model-id}" t
+  [[ -f "$doc" ]] || die "doc not found: $doc" 1
+  t="$(_table "$doc")" || die "gate-summary: contract violation in $doc" 1
+
+  # ratio + disputes + agreed, from the table
+  printf '%s\n' "$t" | awk -F'\t' '
+    function emit(want,   lvl,i,levels){ split("high med low",levels," ");
+      for(lvl=1;lvl<=3;lvl++) for(i=1;i<=n;i++) if(st[i]==want && sv[i]==levels[lvl]) print txt[i] }
+    { n++; id[n]=$1; raiser[n]=$2; st[n]=$3; resp[n]=$4; concern[n]=$5; why[n]=$6; sv[n]=$7; risk[n]=$8
+      if($3=="agreed")a++; else if($3=="dissent")d++
+      emoji=(sv[n]=="high")?"🔴":(sv[n]=="med")?"🟠":"🟡"
+      if($3=="dissent") txt[n]=emoji " " sv[n] " — " concern[n] " (via " raiser[n] ") — primary disputes: " why[n]
+      else txt[n]=emoji " " sv[n] " — " concern[n] " (via " raiser[n] ")"
+      # count SECONDARIES (providers), not model strings (r10): the provider is the ns-id prefix
+      # before "-rd" (ids are <provider>-rd<N>-<rawid>). raiser is the model, which can collide.
+      split($1, pp, "-rd"); secs[pp[1]]=1
+    }
+    END {
+      ns=0; for(s in secs)ns++
+      printf "Primary agreed with %d findings, DISPUTED %d (of %d across %d secondaries).\n\n", a+0, d+0, n+0, ns
+      if(d>0){ print "Disputes (high→low):"; emit("dissent"); print "" }
+    }'
+
+  # quarantined secondaries (readability channel: the in-doc records)
+  if grep -qE '^<!-- star-quarantined: ' "$doc"; then
+    echo "Quarantined secondaries (findings excluded):"
+    grep -oE '^<!-- star-quarantined: [^·]+· [^·]+· round [0-9]+ -->' "$doc" \
+      | sed -E 's/^<!-- star-quarantined: (.*) -->$/  - \1/'
+    echo
+  fi
+
+  # agreed findings, compactly
+  printf '%s\n' "$t" | awk -F'\t' '
+    $3=="agreed"{ printf "  agreed: %s — %s (via %s)\n", $7, $5, $2 }'
+  echo "———"
+  echo "🤖 Star review gate summary — primary ${primary}. Human gate decides; nothing auto-merges."
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
@@ -384,6 +423,7 @@ main() {
     open-findings) cmd_open_findings "$@" ;;
     merge) cmd_merge "$@" ;;
     check-converged) cmd_check_converged "$@" ;;
+    gate-summary) cmd_gate_summary "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }

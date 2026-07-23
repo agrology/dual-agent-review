@@ -281,6 +281,29 @@ bash "$SUT" merge --round 2 "$D2" "${D2}.codex" >/dev/null 2>&1
 sed -i.bak 's/awaiting-primary/converged/' "$D2" && rm -f "${D2}.bak"
 bash "$SUT" check-converged "$D2" >/dev/null 2>&1 && ok "check-converged: round-2 cumulative reproducibility passes" || bad "check-converged round-2 cumulative"
 
+# --- gate-summary ---
+G="${WORK}/gate.md"
+{ echo "# Doc"; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$G"
+{
+  echo '> [finding:codex-rd1-r1|high] sql injection'; echo '> — via gpt-5.5'; echo '> — risk: rce'
+  echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'
+  echo '> [finding:gemini-rd1-r1|low] nit naming'; echo '> — via gemini'; echo '> — risk: minor'
+  echo '> [dispute:gemini-rd1-r1] style pref, not a bug'; echo '> — via claude-opus-4-8'
+  echo '<!-- star-quarantined: fable · identity-fail · round 1 -->'
+} >> "$G"
+before="$(shasum "$G" | cut -d' ' -f1)"
+out="$(bash "$SUT" gate-summary "$G" claude-opus-4-8 2>/dev/null)"
+after="$(shasum "$G" | cut -d' ' -f1)"
+
+# ratio line first and correct
+echo "$out" | head -1 | grep -qE 'agreed with 1 .*DISPUTED 1 .*of 2 across' && ok "gate-summary: ratio first" || bad "gate ratio (got: $(echo "$out" | head -1))"
+# dispute shown with the disputed finding text + reason
+echo "$out" | grep -q 'nit naming' && echo "$out" | grep -q 'style pref' && ok "gate-summary: dispute detail" || bad "gate dispute detail"
+# quarantine named
+echo "$out" | grep -q 'fable' && ok "gate-summary: quarantine named" || bad "gate quarantine"
+# pure read — doc unchanged
+[[ "$before" == "$after" ]] && ok "gate-summary: does not mutate doc" || bad "gate mutated doc"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
