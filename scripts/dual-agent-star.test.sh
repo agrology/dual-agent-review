@@ -131,6 +131,14 @@ mkcopy "${BASE3}.codex" '> [finding:r1|high] path C:\notreal\test' '> — via gp
 bash "$SUT" merge --round 1 "$BASE3" "${BASE3}.codex" >/dev/null 2>&1
 grep -qF 'C:\notreal\test' "$BASE3" && ok "merge: literal backslash-escape survives verbatim (r11)" || bad "merge mangled backslash-escape text"
 
+# unregistered provider -> hard error, doc left untouched (not silently corrupted)
+BASEQ="${WORK}/mbad.md"; { echo "# Doc"; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$BASEQ"
+mkcopy "${BASEQ}.bogus" '> [finding:r1|high] x' '> — via m' '> — risk: r'
+before="$(shasum "$BASEQ" | cut -d' ' -f1)"
+bash "$SUT" merge --round 1 "$BASEQ" "${BASEQ}.bogus" >/dev/null 2>&1; rc=$?
+after="$(shasum "$BASEQ" | cut -d' ' -f1)"
+[[ $rc -ne 0 && "$before" == "$after" ]] && ok "merge: unregistered provider -> nonzero exit, doc untouched" || bad "merge bad-provider (rc=$rc)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

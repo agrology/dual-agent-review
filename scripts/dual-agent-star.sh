@@ -257,7 +257,7 @@ cmd_merge() {
   local block="" copy provider
   for copy in "${copies[@]}"; do
     [[ -f "$copy" ]] || die "merge: copy not found: $copy" 1
-    provider="$(provider_of_copy "$doc" "$copy")"
+    provider="$(provider_of_copy "$doc" "$copy")" || exit $?
     block="${block}$(namespace_blocks "$provider" "$round" "$copy")"$'\n'
   done
 
