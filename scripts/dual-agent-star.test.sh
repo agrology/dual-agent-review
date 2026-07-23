@@ -179,9 +179,77 @@ bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "no-response should fail
 D="$(mkconv conv-soft.md)"; sed -i.bak 's/alpha/ALPHA-softened/' "$D" && rm -f "${D}.bak"
 bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "softened text should fail" || ok "check-converged: softened text fails (r14)"
 
-# deleted finding block -> fail (r9)
-D="$(mkconv conv-del.md)"; grep -v 'finding:codex-rd1-r1' "$D" > "$D.x" && mv "$D.x" "$D"
-bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "erasure should fail" || ok "check-converged: erasure fails (r9)"
+# --- erasure r9: GRAMMAR-VALID clean erasure, catchable ONLY by guard (b) ---
+# A naive erasure (deleting just the [finding:] line) leaves its `[agree:]` response
+# orphaned, so _table's "response to unknown finding id" dies BEFORE guard (b) ever runs
+# (the early `t="$(_table "$doc")" || exit 1`) — that version of this test had no teeth.
+# Build a doc with TWO findings (from two providers, so ids don't collide), respond to
+# both, converge, and confirm it passes first — THEN erase one finding's entire block
+# (the [finding:] line + its "> — via"/"> — risk:" continuation lines) AND its response
+# block (the [agree:] line + its "> — via" line) together, so the remaining doc is still
+# grammar-valid (no orphan) with one finding+response — but the manifest still lists both
+# ns-ids, so only guard (b)'s present-set == manifest-set check can catch it.
+mkconv2() {  # -> merged doc w/ 2 findings (codex, gemini), both agreed, converged marker
+  local base="${WORK}/$1"
+  { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/2 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$base"
+  mkcopy "${base}.codex"  '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+  mkcopy "${base}.gemini" '> [finding:r1|med] beta'   '> — via gemini'  '> — risk: rb'
+  bash "$SUT" merge --round 1 "$base" "${base}.codex" "${base}.gemini" >/dev/null 2>&1
+  { echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; echo '> [agree:gemini-rd1-r1]'; echo '> — via claude-opus-4-8'; } >> "$base"
+  sed -i.bak 's/awaiting-primary/converged/' "$base" && rm -f "${base}.bak"
+  echo "$base"
+}
+
+D="$(mkconv2 conv-del.md)"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && ok "check-converged: 2-finding doc converges (sanity)" || bad "check-converged: 2-finding sanity should pass"
+
+# clean grammar-valid erasure of gemini-rd1-r1's finding block + its agree response
+awk '
+  /^> \[finding:gemini-rd1-r1/ { skip=2; next }
+  /^> \[agree:gemini-rd1-r1\]/ { skip=1; next }
+  skip > 0 { skip--; next }
+  { print }
+' "$D" > "$D.x" && mv "$D.x" "$D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "clean erasure should fail (r9/guard-b)" || ok "check-converged: clean erasure fails (r9, guard-b)"
+
+# --- injection r9: extra [finding:] whose ns-id is NOT in the manifest ---
+# Fully grammar-valid and fully responded (so coverage passes and _table is clean) — the
+# only thing wrong is that this ns-id was never merged, so it's absent from the manifest.
+# present-set now has an id the manifest lacks -> guard (b) (with guard (c)'s "id must be
+# in manifest to look up `want`" as a natural backstop for the reverse direction).
+D="$(mkconv conv-inject.md)"
+{
+  echo '> [finding:bogus-rd1-r1|high] injected finding'
+  echo '> — via gpt-5.5'
+  echo '> — risk: rx'
+  echo '> [agree:bogus-rd1-r1]'
+  echo '> — via claude-opus-4-8'
+} >> "$D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "injected finding should fail" || ok "check-converged: injection fails (r9, guard-b)"
+
+# --- short-circuit negatives (cheap contract locks) ---
+# merged but NOT converged (marker still awaiting-primary) -> fail, before any guard runs
+mkconv_noflip() {  # like mkconv but does NOT flip the marker to converged
+  local base="${WORK}/$1"
+  { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/2 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$base"
+  mkcopy "${base}.codex" '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+  bash "$SUT" merge --round 1 "$base" "${base}.codex" >/dev/null 2>&1
+  { echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; } >> "$base"
+  echo "$base"
+}
+D="$(mkconv_noflip conv-notconverged.md)"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "non-converged marker should fail" || ok "check-converged: marker not converged fails"
+
+# no <doc>.manifest (bare star doc, never merged) -> fail on the early manifest-presence guard
+D="${WORK}/conv-nomanifest.md"
+{
+  echo "# Doc"; echo '<!-- dual-agent-review: converged · round 1/2 -->'; echo '<!-- dual-agent-mode: star -->'
+  echo; echo "## Review"; echo
+  echo '> [finding:codex-rd1-r1|high] a'; echo '> — via gpt-5.5'; echo '> — risk: r'
+  echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'
+} > "$D"
+[[ ! -f "${D}.manifest" ]] || bad "test setup: manifest unexpectedly exists for $D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "missing manifest should fail" || ok "check-converged: no manifest fails"
 
 # deleted quarantine record + its mirror, doc-only -> still fail (r16)
 Q="${WORK}/conv-q.md"
