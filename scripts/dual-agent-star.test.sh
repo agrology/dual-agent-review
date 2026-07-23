@@ -102,6 +102,35 @@ bash "$SUT" open-findings "$D" >/dev/null 2>&1 && bad "missing risk at EOF shoul
 D="$(mkrev dupe.md '> [finding:codex-rd1-r1|high] a' '> — via gemini' '> — risk: r' '' '> [finding:codex-rd1-r1|high] b' '> — via gemini' '> — risk: r')"
 bash "$SUT" open-findings "$D" >/dev/null 2>&1 && bad "dup id should hard-error" || ok "open-findings: duplicate id hard-errors"
 
+# --- merge: namespacing ---
+# build a raw secondary copy (finding ids are un-namespaced, as a secondary emits them)
+mkcopy() { local p="$1"; shift; { echo "# Doc"; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; printf '%s\n' "$@"; } > "$p"; }
+
+BASE="${WORK}/m1.md"; { echo "# Doc"; echo '<!-- dual-agent-mode: star · reviewers: codex gemini -->'; echo; echo "## Review"; echo; } > "$BASE"
+mkcopy "${BASE}.codex"  '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+mkcopy "${BASE}.gemini" '> [finding:r1|med] beta'   '> — via gemini'  '> — risk: rb'
+bash "$SUT" merge --round 1 "$BASE" "${BASE}.codex" "${BASE}.gemini" >/dev/null 2>&1
+
+# both r1s land namespaced, no collision
+grep -q '^> \[finding:codex-rd1-r1|high\] alpha$'  "$BASE" && ok "merge: codex-rd1-r1 present" || bad "merge codex ns"
+grep -q '^> \[finding:gemini-rd1-r1|med\] beta$'   "$BASE" && ok "merge: gemini-rd1-r1 present" || bad "merge gemini ns"
+# severity preserved, not dropped or doubled
+grep -q '|high|' "$BASE" && bad "merge: severity doubled" || ok "merge: no doubled severity"
+# continuation lines carried verbatim
+grep -q '^> — risk: ra$' "$BASE" && grep -q '^> — via gpt-5.5$' "$BASE" && ok "merge: block continuation lines preserved" || bad "merge continuation lost"
+
+# round 2 with same raw id -> no cross-round collision
+mkcopy "${BASE}.codex" '> [finding:r1|low] gamma' '> — via gpt-5.5' '> — risk: rc'
+bash "$SUT" merge --round 2 "$BASE" "${BASE}.codex" >/dev/null 2>&1
+grep -q '^> \[finding:codex-rd2-r1|low\] gamma$' "$BASE" && ok "merge: codex-rd2-r1 (no cross-round collision)" || bad "merge round2 ns"
+grep -q '^> \[finding:codex-rd1-r1|high\] alpha$' "$BASE" && ok "merge: round1 finding still intact" || bad "merge clobbered round1"
+
+# byte-safety: finding text containing a literal backslash-escape must survive merge verbatim (r11)
+BASE3="${WORK}/m3.md"; { echo "# Doc"; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$BASE3"
+mkcopy "${BASE3}.codex" '> [finding:r1|high] path C:\notreal\test' '> — via gpt-5.5' '> — risk: r'
+bash "$SUT" merge --round 1 "$BASE3" "${BASE3}.codex" >/dev/null 2>&1
+grep -qF 'C:\notreal\test' "$BASE3" && ok "merge: literal backslash-escape survives verbatim (r11)" || bad "merge mangled backslash-escape text"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

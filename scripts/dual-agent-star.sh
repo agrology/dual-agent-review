@@ -213,6 +213,71 @@ cmd_open_findings() { # <doc> -> ids with state==open
   printf '%s\n' "$t" | awk -F'\t' '$3 == "open" { print $1 }'
 }
 
+provider_of_copy() { # <doc> <copy> -> provider (exact suffix after "<doc>.")
+  local doc="$1" copy="$2"
+  local p="${copy#${doc}.}"   # exact prefix strip (r8), not ${##*.}
+  # validate against the registry rather than a hardcoded list (r8): resolve-set already
+  # trusts the registry as the source of truth, so merge must too.
+  [[ "$p" != "$copy" ]] || die "copy name does not match <doc>.<provider>: $copy" 2
+  "$REVIEWER_SH" resolve --reviewer "$p" >/dev/null 2>&1 \
+    || die "copy names an unknown provider '${p}': $copy" 2
+  echo "$p"
+}
+
+# emit a copy's finding blocks with ids namespaced <id> -> <provider>-rd<N>-<id> on the
+# [finding:] line only, preserving |sev; all other lines pass through verbatim.
+namespace_blocks() { # <provider> <round> <copy>
+  local provider="$1" round="$2" copy="$3"
+  review_section "$copy" | strip_fences /dev/stdin | awk -v pfx="${provider}-rd${round}-" '
+    /^> \[finding:[A-Za-z0-9_-]+([|][^]]*)?]/ {
+      # rewrite only the id token between "finding:" and the first "|" or "]"
+      pre = "> [finding:"; s = substr($0, length(pre)+1)
+      # s begins with <id>[|sev]] rest...
+      i = 1
+      while (i <= length(s) && substr(s,i,1) != "|" && substr(s,i,1) != "]") i++
+      id = substr(s, 1, i-1); tail = substr(s, i)
+      print pre pfx id tail; next
+    }
+    { print }
+  '
+}
+
+cmd_merge() {
+  local round="" doc="" copies=() quarantined=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --round) [[ $# -ge 2 ]] || die "--round requires a value" 2; round="$2"; shift 2 ;;
+      --quarantined) [[ $# -ge 2 ]] || die "--quarantined requires a value" 2; quarantined+=("$2"); shift 2 ;;
+      *) if [[ -z "$doc" ]]; then doc="$1"; else copies+=("$1"); fi; shift ;;
+    esac
+  done
+  [[ "$round" =~ ^[0-9]+$ ]] || die "--round <N> required (integer)" 2
+  [[ -n "$doc" && -f "$doc" ]] || die "merge: doc not found: ${doc:-<none>}" 1
+
+  local block="" copy provider
+  for copy in "${copies[@]}"; do
+    [[ -f "$copy" ]] || die "merge: copy not found: $copy" 1
+    provider="$(provider_of_copy "$doc" "$copy")"
+    block="${block}$(namespace_blocks "$provider" "$round" "$copy")"$'\n'
+  done
+
+  # append the namespaced blocks after the LAST "## Review" heading. Pass $block via the
+  # ENVIRONMENT (ENVIRON[]) — NOT `awk -v add=...`, which escape-processes C sequences and would
+  # turn a literal "\n"/"\t"/"\\" in a finding's text into a real newline/tab, corrupting the
+  # byte-verbatim guarantee (and then hashing the corrupted form). ENVIRON values are not
+  # escape-processed. (r11)
+  local tmp; tmp="$(mktemp "${doc}.tmp.XXXXXX")" || die "cannot create temp for: $doc" 1
+  ADD_BLOCK="$block" awk '
+    { lines[NR]=$0; if ($0 ~ /^## Review[[:space:]]*$/) last=NR }
+    END {
+      for (i=1;i<=NR;i++) {
+        print lines[i]
+        if (i==last) { print ""; printf "%s", ENVIRON["ADD_BLOCK"] }
+      }
+    }
+  ' "$doc" > "$tmp" && mv "$tmp" "$doc" || { rm -f "$tmp"; die "merge: failed to write $doc" 1; }
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
@@ -220,6 +285,7 @@ main() {
     resolve-set) cmd_resolve_set "$@" ;;
     available) cmd_available "$@" ;;
     open-findings) cmd_open_findings "$@" ;;
+    merge) cmd_merge "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
