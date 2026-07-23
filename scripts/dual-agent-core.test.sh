@@ -335,6 +335,15 @@ EOF
 out="$(bash "$SUT" open-threads "$D" 2>/dev/null | tr '\n' ' ')"
 [[ "$out" == "r9 " ]] && ok "balanced nested (4-backtick) block: thread after it still parsed" || bad "nested block broke thread parsing (got '$out')"
 
+# star states are recognized additively
+D="${WORK}/star-sec.md"; { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-secondaries · round 1/2 -->'; echo; echo "## X"; } > "$D"
+out="$(bash "$SUT" marker "$D" 2>/dev/null)"; [[ "$out" == "awaiting-secondaries 1 2" ]] && ok "marker: awaiting-secondaries recognized" || bad "star-sec (got '$out')"
+D="${WORK}/star-pri.md"; { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 2/2 -->'; echo; echo "## X"; } > "$D"
+out="$(bash "$SUT" marker "$D" 2>/dev/null)"; [[ "$out" == "awaiting-primary 2 2" ]] && ok "marker: awaiting-primary recognized" || bad "star-pri (got '$out')"
+# existing state still works
+D="${WORK}/still-rev.md"; { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-reviewer · round 1/10 -->'; echo; echo "## X"; } > "$D"
+out="$(bash "$SUT" marker "$D" 2>/dev/null)"; [[ "$out" == "awaiting-reviewer 1 10" ]] && ok "marker: existing state intact" || bad "still-rev (got '$out')"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

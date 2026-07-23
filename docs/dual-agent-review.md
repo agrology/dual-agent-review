@@ -68,6 +68,42 @@ the diff directly references**, solely to check the change is self-consistent. T
 narrow, local-read allowance: no whole-corpus sweeps, no upload, and any finding it produces
 must still name the changed hunk that introduces the conflict.
 
+## Star review (multi-secondary)
+
+When a copy carries `<!-- dual-agent-mode: star -->` in its header and the marker is
+`awaiting-reviewer`, you are one **secondary** reviewing an isolated copy of a design doc. You
+never see other secondaries or the primary's responses — that independence is the point.
+
+- **Scope: the whole document body.** Star is NOT diff-scoped (unlike peer-review); there is no
+  `## Diff`. Review the design on its merits, end to end.
+- Raise a finding: `> [finding:<id>|<sev>] <concern>` + a required `> — via <model>` line + a
+  required `> — risk: <short risk>` line. `<sev>` is `high`, `med`, or `low`. One short line per
+  concern, one clause per risk.
+- Use fresh short ids (`r1`, `r2`, …) scoped to this copy — the orchestrator namespaces them by
+  provider and round (`<provider>-rd<N>-<id>`), so you never coordinate ids with anyone.
+- You do not respond to findings and you do not converge — a secondary raises findings only. The
+  primary ingests, agrees/disputes, and decides convergence.
+- Flip the marker `awaiting-reviewer` → `awaiting-author` as your FINAL edit (the flip is the
+  handoff). Read only this copy; do not implement, commit, or open a PR.
+
+**Primary (star).** On the merged doc (marker `awaiting-primary`) the primary responds to every
+merged finding with **exactly one** of these — NOT the asymmetric `> [author: resolved:<id>]`,
+which star's `check-converged` ignores (using it would loop forever, never converging):
+
+- `> [agree:<ns-id>]` + `> — via <primary-model-id>` — accept the finding and address it in the
+  doc body, or
+- `> [dispute:<ns-id>] <one-line reason>` + `> — via <primary-model-id>` — reject it, tersely. A
+  dispute never forces a round.
+
+Convergence is **coverage, not consensus**: every merged finding needs exactly one `agree`/`dispute`;
+disputes are expected and do not block. The human gate settles disputes.
+
+**Model-id distinctness:** every secondary and the primary must disclose their own *real* model
+id on `> — via <model>`. The primary's disclosed id must differ from every secondary's — the
+self-response guard fails a response whose model equals the finding's raiser model, so a
+Claude-family secondary (e.g. `fable`) colliding with a Claude primary id would make convergence
+impossible.
+
 ## Turn-taking discipline
 
 - **Reviewer:** write all concerns first, then flip `awaiting-reviewer` → `awaiting-author`
