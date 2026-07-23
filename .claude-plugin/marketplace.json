@@ -1,0 +1,22 @@
+{
+  "name": "agrology",
+  "owner": { "name": "Agrology" },
+  "description": "Agrology's Claude Code plugins.",
+  "plugins": [
+    {
+      "name": "dual-agent-review",
+      "source": { "source": "github", "repo": "agrology/dual-agent-review" },
+      "description": "Human-gated dual-agent review: a Claude author agent and an external reviewer agent (Codex, Claude Fable 5, or Gemini) converge on a spec/plan/PR doc through bounded rounds, ending at a human approval gate.",
+      "category": "code-review",
+      "keywords": [
+        "code-review",
+        "peer-review",
+        "design-review",
+        "spec-review",
+        "pull-request",
+        "multi-agent",
+        "human-in-the-loop"
+      ]
+    }
+  ]
+}

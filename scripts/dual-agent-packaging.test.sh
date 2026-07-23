@@ -20,6 +20,46 @@ else
   bad "plugin.json missing at .claude-plugin/plugin.json"
 fi
 
+# --- self-hosted marketplace manifest: valid JSON, required keys, non-reserved name,
+#     and every plugin entry has the required name+source (kept in sync with plugin.json) ---
+MKT="${ROOT}/.claude-plugin/marketplace.json"
+if [[ -f "$MKT" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$MKT" "$MAN" <<'PY' && ok "marketplace.json valid: required keys, non-reserved name, entries have name+source" || bad "marketplace.json invalid"
+import json, sys
+mkt = json.load(open(sys.argv[1]))
+plug = json.load(open(sys.argv[2]))
+# top-level required fields
+for k in ("name", "owner", "plugins"):
+    assert mkt.get(k), f"marketplace missing {k}"
+assert isinstance(mkt["owner"].get("name"), str) and mkt["owner"]["name"], "owner.name"
+# reserved marketplace names may not be used by third parties (docs: plugin-marketplaces)
+RESERVED = {
+    "claude-code-marketplace", "claude-code-plugins", "claude-plugins-official",
+    "claude-plugins-community", "claude-community", "anthropic-marketplace",
+    "anthropic-plugins", "agent-skills", "anthropic-agent-skills",
+    "knowledge-work-plugins", "life-sciences", "claude-for-legal",
+    "claude-for-financial-services", "financial-services-plugins",
+    "first-party-plugins", "healthcare",
+}
+assert mkt["name"] not in RESERVED, f"marketplace name '{mkt['name']}' is reserved"
+assert mkt["name"] == mkt["name"].lower() and " " not in mkt["name"], "name must be kebab-case, no spaces"
+# every plugin entry needs name + source
+assert isinstance(mkt["plugins"], list) and mkt["plugins"], "plugins must be a non-empty array"
+for p in mkt["plugins"]:
+    assert p.get("name"), "plugin entry missing name"
+    assert p.get("source"), f"plugin '{p.get('name')}' missing source"
+# the entry for THIS plugin must agree with plugin.json on the name
+names = {p["name"] for p in mkt["plugins"]}
+assert plug["name"] in names, f"plugin.json name '{plug['name']}' not listed in marketplace.json"
+PY
+  else
+    ok "marketplace.json present (python3 absent; skipped deep validation)"
+  fi
+else
+  bad "marketplace.json missing at .claude-plugin/marketplace.json"
+fi
+
 # --- commands relocated, old dir gone ---
 [[ -f "${ROOT}/commands/dual-review.md" ]]      && ok "commands/dual-review.md present"      || bad "commands/dual-review.md missing"
 [[ ! -e "${ROOT}/commands/dual-review-auto.md" ]] && ok "commands/dual-review-auto.md removed (autonomous is the default)" \

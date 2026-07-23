@@ -11,13 +11,18 @@ reviewer iterates with it to convergence — always ending at a **human approval
 
 ## Install
 
-As a Claude Code plugin:
+As a Claude Code plugin — install directly:
 
     /plugin install agrology/dual-agent-review
 
-This installs the `/dual-review` slash command and its supporting scripts. It does **not**
-install the reviewer side — see "Reviewer setup" below, though note that the `fable` reviewer
-needs no setup at all.
+Or add this repo as a marketplace first, to browse and get updates through the plugin UI:
+
+    /plugin marketplace add agrology/dual-agent-review
+    /plugin install dual-agent-review@agrology
+
+Either way, this installs the `/dual-review` slash command and its supporting scripts. It does
+**not** install the reviewer side — see "Reviewer setup" below, though note that the `fable`
+reviewer needs no setup at all.
 
 ## Reviewer setup (BYO reviewer)
 
