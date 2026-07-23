@@ -105,7 +105,7 @@ parse_set() {
 
 cmd_resolve_set() {
   local raw seen="" id row out=""
-  raw="$(parse_set "$@")"
+  raw="$(parse_set "$@")" || exit $?
   # normalize whitespace; dedup preserving order
   for id in $raw; do
     case " $seen " in *" $id "*) continue ;; esac
