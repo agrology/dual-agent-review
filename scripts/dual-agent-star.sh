@@ -242,6 +242,22 @@ namespace_blocks() { # <provider> <round> <copy>
   '
 }
 
+sha() { shasum -a 256 | cut -d' ' -f1; }   # macOS+Linux; falls back below if absent
+if ! command -v shasum >/dev/null 2>&1; then sha() { sha256sum | cut -d' ' -f1; }; fi
+
+# hash of one finding block (the [finding:] line + its > — continuation lines) by ns-id.
+# Uses literal index() matching, NOT a concatenated regex (r9): building "^> \[finding:" id ...
+# would treat any metachar in id as a pattern. ns-ids are [A-Za-z0-9_-]+ so this is belt-and-
+# suspenders, but literal matching is clearer and injection-proof regardless.
+finding_block_hash() { # <doc> <ns-id>
+  local doc="$1" id="$2"
+  review_section "$doc" | strip_fences /dev/stdin | awk -v id="$id" '
+    (index($0, "> [finding:" id "|") == 1 || index($0, "> [finding:" id "]") == 1) { grab=1; print; next }
+    grab && /^> — / { print; next }
+    grab { grab=0 }
+  ' | sha
+}
+
 cmd_merge() {
   local round="" doc="" copies=() quarantined=()
   while [[ $# -gt 0 ]]; do
@@ -276,6 +292,38 @@ cmd_merge() {
       }
     }
   ' "$doc" > "$tmp" && mv "$tmp" "$doc" || { rm -f "$tmp"; die "merge: failed to write $doc" 1; }
+
+  # collect the ns-ids just merged THIS round — read them from $block (the content appended
+  # this round), NOT by grepping the whole doc for a "-rd${round}-" substring. A substring grep
+  # is unanchored and would falsely re-match a prior-round id whose own text happens to contain
+  # "-rd${round}-" (e.g. a secondary that named a finding "bug-rd2-fix" → "codex-rd1-bug-rd2-fix"
+  # matches round 2). Sourcing from $block is unambiguous — those are exactly this round's blocks.
+  local nsids id line mirror="" qline
+  nsids="$(printf '%s' "$block" \
+    | grep -oE '^> \[finding:[^]|]+' | sed -E 's/^> \[finding://' || true)"
+  : > "${doc}.manifest.tmp" || true
+  # cumulative: preserve prior manifest lines
+  [[ -f "${doc}.manifest" ]] && cat "${doc}.manifest" >> "${doc}.manifest.tmp"
+  for id in $nsids; do
+    line="${id}=$(finding_block_hash "$doc" "$id")"
+    echo "finding ${line}" >> "${doc}.manifest.tmp"
+    mirror="${mirror}${line} "
+  done
+
+  # quarantine records (durable in-doc) + manifest binding
+  local qprovider qreason qmirror=""
+  for q in "${quarantined[@]:-}"; do
+    [[ -z "$q" ]] && continue
+    qprovider="${q%%:*}"; qreason="${q#*:}"
+    qline="<!-- star-quarantined: ${qprovider} · ${qreason} · round ${round} -->"
+    printf '%s\n' "$qline" >> "$doc"           # durable record
+    echo "quarantine ${qprovider}=$(printf '%s' "$qline" | sha)" >> "${doc}.manifest.tmp"
+    qmirror="${qmirror}${qprovider}=$(printf '%s' "$qline" | sha) "
+  done
+  mv "${doc}.manifest.tmp" "${doc}.manifest"
+
+  # in-doc human-readable mirror (NOT trusted for integrity — see check-converged)
+  printf '<!-- star-findings: %s; quarantined: %s -->\n' "${mirror% }" "${qmirror% }" >> "$doc"
 }
 
 main() {
