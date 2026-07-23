@@ -27,7 +27,7 @@ read_marker() { # <doc> -> sets MK_STATE MK_ROUND MK_MAX; returns 1 unless EXACT
   [[ "$line" =~ $MARKER_RE ]] || return 1
   MK_STATE="${BASH_REMATCH[1]}"; MK_ROUND="${BASH_REMATCH[2]}"; MK_MAX="${BASH_REMATCH[3]}"
   case "$MK_STATE" in
-    awaiting-reviewer|awaiting-author|converged|exhausted) return 0 ;;
+    awaiting-reviewer|awaiting-author|awaiting-secondaries|awaiting-primary|converged|exhausted) return 0 ;;
     *) return 1 ;;
   esac
 }
