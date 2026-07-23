@@ -56,6 +56,14 @@ out="$(bash "$SUT" resolve-set --reviewers gemini 2>/dev/null)"
 bash "$SUT" resolve-set --reviewers >/dev/null 2>&1; rc=$?
 [[ $rc -eq 2 ]] && ok "resolve-set: --reviewers with no value -> usage exit 2" || bad "resolve-set no-value exit (got $rc)"
 
+# --- available ---
+out="$(bash "$SUT" available 2>/dev/null)"
+# fable has no external prereq, so it must always be dispatchable
+echo "$out" | grep -qE '^fable yes$' && ok "available: fable yes" || bad "available fable (got '$out')"
+# all three providers listed, in registry order
+ids="$(echo "$out" | cut -d' ' -f1 | tr '\n' ' ')"
+[[ "$ids" == "codex fable gemini " ]] && ok "available: lists all three in order" || bad "available order (got '$ids')"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

@@ -118,11 +118,23 @@ cmd_resolve_set() {
   printf '%s' "$out"
 }
 
+cmd_available() {
+  local id
+  for id in codex fable gemini; do
+    if "$REVIEWER_SH" check --reviewer "$id" >/dev/null 2>&1; then
+      echo "$id yes"
+    else
+      echo "$id no"
+    fi
+  done
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     mode) cmd_mode "$@" ;;
     resolve-set) cmd_resolve_set "$@" ;;
+    available) cmd_available "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
