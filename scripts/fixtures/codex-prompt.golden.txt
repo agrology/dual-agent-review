@@ -1,5 +1,5 @@
-You are the external reviewer in this repo's dual-agent review. Use your dual-review skill
-(it reads docs/dual-agent-review.md and detects asymmetric vs peer-review mode itself).
+You are the external reviewer in this repo's multi-review review. Use your multi-review skill
+(it reads docs/multi-review.md and detects asymmetric vs peer-review mode itself).
 
 Review EXACTLY this document — its canonical absolute path:
   @@DOC@@

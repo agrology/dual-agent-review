@@ -1,0 +1,4 @@
+interface:
+  display_name: "Multi Review"
+  short_description: "Review multi-review protocol docs"
+  default_prompt: "Use /multi-review to review a multi-review review document."

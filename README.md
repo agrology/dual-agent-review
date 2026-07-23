@@ -1,7 +1,7 @@
-# dual-agent-review
+# multi-review
 
 <p align="center">
-  <img src="docs/dual-agents-meme.png" alt="The three-Spider-Men-pointing meme: author agent, reviewer agent, and the human gate all pointing at each other" width="480">
+  <img src="docs/multi-review-meme.png" alt="The three-Spider-Men-pointing meme: author agent, reviewer agent, and the human gate all pointing at each other" width="480">
   <br>
   <em>Author agent, reviewer agent, human gate — everyone double-checking everyone.</em>
 </p>
@@ -13,9 +13,9 @@ reviewer iterates with it to convergence — always ending at a **human approval
 
 As a Claude Code plugin:
 
-    /plugin install agrology/dual-agent-review
+    /plugin install agrology/multi-review
 
-This installs the `/dual-review` slash command and its supporting scripts. It does **not**
+This installs the `/multi-review` slash command and its supporting scripts. It does **not**
 install the reviewer side — see "Reviewer setup" below, though note that the `fable` reviewer
 needs no setup at all.
 
@@ -30,8 +30,8 @@ What you need depends on which reviewer you pick — **only `codex` requires set
 | `codex` *(default)* | The `codex` CLI, authenticated, **and** the reviewer skill copied into your repo (below). |
 
 **Codex only** — copy the self-contained reviewer skill from this repo
-(`.agents/skills/dual-review/`) into your target repo at exactly
-`<your-repo>/.agents/skills/dual-review/`. That fixed, repo-root-relative location is what the
+(`.agents/skills/multi-review/`) into your target repo at exactly
+`<your-repo>/.agents/skills/multi-review/`. That fixed, repo-root-relative location is what the
 skill's bundled helper/protocol paths resolve against, so the path must match. Then run Codex
 **from your repo's root** so those paths resolve.
 
@@ -41,7 +41,7 @@ sides converge once a reviewer is in place.
 
 ### Choosing the reviewer model
 
-The reviewer defaults to **Codex/GPT**. To use a different one, set `DUAL_AGENT_REVIEWER`:
+The reviewer defaults to **Codex/GPT**. To use a different one, set `MULTI_REVIEW_REVIEWER`:
 
 | value | reviewer | needs |
 |---|---|---|
@@ -50,7 +50,7 @@ The reviewer defaults to **Codex/GPT**. To use a different one, set `DUAL_AGENT_
 | `gemini` | Gemini via the `gemini` CLI | `gemini` on PATH, authenticated |
 
 ```bash
-export DUAL_AGENT_REVIEWER=fable
+export MULTI_REVIEW_REVIEWER=fable
 ```
 
 **Which model each provider runs.** Defaults prefer a *provider-published* alias over a version
@@ -60,9 +60,9 @@ pinned in this repo, so a new release is picked up without a code change:
 |---|---|---|
 | `codex` | `gpt-5.5` | OpenAI publishes no "latest" alias, so a named default is unavoidable. It must be non-empty — an unset model lets the `codex:codex-rescue` wrapper answer as Claude. |
 | `fable` | `fable` | Already an alias the harness resolves; no version here to go stale. |
-| `gemini` | `gemini-pro-latest` | Google's own alias for the top Pro tier. Without an explicit `-m` the CLI falls back to the cheaper *flash* tier, which is a weaker reviewer. **Note:** this alias currently resolves to a **preview** model (`gemini-3.1-pro-preview` at time of writing), and preview models can change or be withdrawn. Pin `DUAL_AGENT_REVIEWER_MODEL` if you need a fixed, non-preview model. |
+| `gemini` | `gemini-pro-latest` | Google's own alias for the top Pro tier. Without an explicit `-m` the CLI falls back to the cheaper *flash* tier, which is a weaker reviewer. **Note:** this alias currently resolves to a **preview** model (`gemini-3.1-pro-preview` at time of writing), and preview models can change or be withdrawn. Pin `MULTI_REVIEW_REVIEWER_MODEL` if you need a fixed, non-preview model. |
 
-`DUAL_AGENT_REVIEWER_MODEL` overrides the default for whichever provider is selected — nothing
+`MULTI_REVIEW_REVIEWER_MODEL` overrides the default for whichever provider is selected — nothing
 above is unoverridable. It names a model, not a provider, so if you switch providers you will
 usually want to unset it. Whatever model runs, `verify-vendor` still checks that the id it
 discloses belongs to the selected provider's vendor.
@@ -81,7 +81,7 @@ discloses belongs to the selected provider's vendor.
 **Independence tiers.** A cross-vendor reviewer (`codex`, `gemini`) gives *architectural*
 independence: different vendor, different model family, separate reasoning. A same-vendor
 reviewer (`fable`) gives fresh context and different weights, but shares a training lineage
-with the Claude author — real value, weaker claim. `dual-agent-reviewer.sh notice` reports a
+with the Claude author — real value, weaker claim. `multi-review-reviewer.sh notice` reports a
 same-vendor pairing so the distinction is visible when you are deciding rather than buried
 here; the autonomous route surfaces it at the human gate automatically.
 
@@ -93,13 +93,13 @@ default (the unattended route is; see "Autonomous review"), but it is what you g
 doc's **canonical absolute path**. That rendezvous requirement is provider-independent — a
 relative path breaks when the reviewer's session opens in a different checkout.
 
-- **Codex/GPT** — install the bundled skill at `.agents/skills/dual-review/` in your repo and
+- **Codex/GPT** — install the bundled skill at `.agents/skills/multi-review/` in your repo and
   run Codex from the repo root, then give it the absolute doc path.
 - **Claude (Fable 5)** — open a second Claude Code session, and paste the output of
-  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer fable`. It carries an explicit
+  `scripts/multi-review-reviewer.sh prompt <doc> --reviewer fable`. It carries an explicit
   instruction to read the bundled protocol before editing, so no skill install is needed.
 - **Gemini** — paste the output of
-  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
+  `scripts/multi-review-reviewer.sh prompt <doc> --reviewer gemini` into a `gemini` session with
   write access to the repo. Same protocol, same human gate.
 
   > **Verified end to end — with one required setting.** A full review was driven through a
@@ -108,7 +108,7 @@ relative path breaks when the reviewer's session opens in a different checkout.
   > for you:
   >
   > 1. **`.gemini/settings.json` must disable gitignore filtering** for review docs that are
-  >    gitignored — which includes **all PR-mode scratch files** (`.dual-agent/reviews/…`) and,
+  >    gitignored — which includes **all PR-mode scratch files** (`.multi-review/reviews/…`) and,
   >    in some repos, `docs/specs`/`docs/plans`. Without it Gemini refuses to read the doc at
   >    all (*"is ignored by configured ignore patterns"*):
   >
@@ -136,27 +136,27 @@ billing. `fable` adds none. The manual route works with any of them.
 
 ## Layout
 
-- `docs/dual-agent-review.md` — the protocol contract
-- `commands/dual-review.md` — the `/dual-review` author-mode command
+- `docs/multi-review.md` — the protocol contract
+- `commands/multi-review.md` — the `/multi-review` author-mode command
 - `.claude-plugin/plugin.json` — the Claude Code plugin manifest
-- `.agents/skills/dual-review/` — the self-contained `/dual-review` reviewer skill, needed **only** for the `codex` provider (`fable`/`gemini` are pointed at the protocol by their prompt)
+- `.agents/skills/multi-review/` — the self-contained `/multi-review` reviewer skill, needed **only** for the `codex` provider (`fable`/`gemini` are pointed at the protocol by their prompt)
   (bundled copies of the protocol doc + reviewer scripts; not installed by the plugin — see
   "Reviewer setup" above)
 - `CLAUDE.md` / `AGENTS.md` — this repo's own engineering working agreement, including the
-  author/reviewer dual-agent protocol pointer (§11)
-- `scripts/dual-agent-egress-guard.sh` — path/egress validation helper
-- `scripts/dual-agent-core.sh` — deterministic marker/thread logic
-- `scripts/dual-agent-watch.sh` — mtime watcher (backgrounded, wakes the author agent)
-- `scripts/dual-agent-wait.sh` — lock-free bounded marker wait (reviewer-side resume)
-- `scripts/dual-agent-pr.sh` — PR-URL mode: ingest a GitHub PR into a local scratch file, then publish the converged review
-- `scripts/dual-agent-peer.sh` — symmetric peer-review grammar (mode detect, open-findings, convergence) for PR-mode docs
-- `scripts/dual-agent-reviewer.sh` — the reviewer **provider registry**: which provider is
+  author/reviewer multi-review protocol pointer (§11)
+- `scripts/multi-review-egress-guard.sh` — path/egress validation helper
+- `scripts/multi-review-core.sh` — deterministic marker/thread logic
+- `scripts/multi-review-watch.sh` — mtime watcher (backgrounded, wakes the author agent)
+- `scripts/multi-review-wait.sh` — lock-free bounded marker wait (reviewer-side resume)
+- `scripts/multi-review-pr.sh` — PR-URL mode: ingest a GitHub PR into a local scratch file, then publish the converged review
+- `scripts/multi-review-peer.sh` — symmetric peer-review grammar (mode detect, open-findings, convergence) for PR-mode docs
+- `scripts/multi-review-reviewer.sh` — the reviewer **provider registry**: which provider is
   selected (`resolve`), whether it's dispatchable (`check`), its reviewer prompt (`prompt`) and
   shell dispatch command (`command`), the same-vendor independence notice (`notice`), and
   post-turn reviewer-identity verification (`verify-vendor`)
-- `scripts/dual-agent-auto-step.sh` — per-round verdict (continue/terminal/stop) for the autonomous loop
-- `scripts/dual-agent-build-reviewer-bundle.sh` — regenerates the bundled reviewer skill from the canonical sources
-- `scripts/dual-agent-history-check.sh` — scans the full git history for internal/sensitive terms; the pre-publish safety gate (see `PUBLISHING.md`)
+- `scripts/multi-review-auto-step.sh` — per-round verdict (continue/terminal/stop) for the autonomous loop
+- `scripts/multi-review-build-reviewer-bundle.sh` — regenerates the bundled reviewer skill from the canonical sources
+- `scripts/multi-review-history-check.sh` — scans the full git history for internal/sensitive terms; the pre-publish safety gate (see `PUBLISHING.md`)
 - `scripts/*.test.sh` — the test suite; one file per script, run by the gate under "Tests" below
 - `scripts/fixtures/codex-prompt.golden.txt` — the byte-identity lock on the Codex reviewer prompt. Captured from the original emitter before it was retired, with the doc path normalised to `@@DOC@@`; it is now the only thing that would catch silent drift in that prompt, so regenerate it deliberately rather than to make a test pass
 - `PUBLISHING.md` — how to take a fork/clone of this repo public safely (fresh-history export or history scrub)
@@ -169,34 +169,34 @@ billing. `fable` adds none. The manual route works with any of them.
 > rendezvous, worktree notes) are shared by both routes.
 
 > **Paths in the examples below** (`scripts/…`, `docs/specs/…`) assume you have this repo
-> cloned. Installed as a **plugin**, you don't run the scripts yourself — the `/dual-review`
+> cloned. Installed as a **plugin**, you don't run the scripts yourself — the `/multi-review`
 > commands resolve their own bundled scripts via `${CLAUDE_PLUGIN_ROOT}` for you; you just run
 > the slash command and copy the reviewer skill into your repo per **Reviewer setup** above.
 
 In your Claude session:
 
-    /dual-review docs/specs/2026-06-09-my-feature.md --attended
+    /multi-review docs/specs/2026-06-09-my-feature.md --attended
 
 Claude arms author mode (inserts the status marker, starts a watcher) and waits, printing the
 doc's canonical absolute path. Hand that path to your reviewer — **any** of the three works
 here:
 
 - **Codex/GPT** — in a second Codex session rooted in **your** repo (skill installed per
-  **Reviewer setup** above), run `/dual-review <abs-path>`.
+  **Reviewer setup** above), run `/multi-review <abs-path>`.
 - **Claude (Fable 5)** or **Gemini** — no skill needed; paste the output of
-  `scripts/dual-agent-reviewer.sh prompt <doc> --reviewer fable` (or `--reviewer gemini`) into
+  `scripts/multi-review-reviewer.sh prompt <doc> --reviewer fable` (or `--reviewer gemini`) into
   that session. The prompt carries the protocol contract's location and the absolute doc path.
 
 The two sides converge through the file; Claude stops at a **human approval gate**. Any other
 agent can play the reviewer too — `AGENTS.md` points it at the same protocol.
 
-- **Config:** `DUAL_AGENT_DOC_DIRS` (default `docs/specs docs/plans`),
-  `DUAL_AGENT_MAX_ROUNDS` (default `10`). The dir list is space-separated, so individual
+- **Config:** `MULTI_REVIEW_DOC_DIRS` (default `docs/specs docs/plans`),
+  `MULTI_REVIEW_MAX_ROUNDS` (default `10`). The dir list is space-separated, so individual
   dirs must not contain spaces (the relative defaults are safe even in a repo whose absolute
   path has them).
-- **Egress:** the command refuses to arm on any path outside `DUAL_AGENT_DOC_DIRS`, a symlink,
+- **Egress:** the command refuses to arm on any path outside `MULTI_REVIEW_DOC_DIRS`, a symlink,
   or a `../` escape. The reviewer reading only the doc is a trusted-reviewer protocol
-  requirement (see `docs/dual-agent-review.md`).
+  requirement (see `docs/multi-review.md`).
 - **Liveness:** there is no reviewer timeout — if the reviewer agent dies mid-turn, the
   author just keeps waiting; interrupt Claude in the terminal.
 - **Worktrees:** the doc's absolute path is the rendezvous. When arming from a git
@@ -207,8 +207,8 @@ agent can play the reviewer too — `AGENTS.md` points it at the same protocol.
   unambiguous: a stale committed marker in a sibling checkout looks like a second live
   doc to a fresh reviewer (the skill stops on that ambiguity rather than guessing).
 - **Pacing:** the author wakes automatically (watcher); the reviewer self-resumes by
-  looping `scripts/dual-agent-wait.sh` between rounds (the skill's default — exit 9 just
-  means "run it again"). Re-invoke `/dual-review <doc>` manually only if the reviewer's
+  looping `scripts/multi-review-wait.sh` between rounds (the skill's default — exit 9 just
+  means "run it again"). Re-invoke `/multi-review <doc>` manually only if the reviewer's
   harness can't keep waiting. An author that wakes while the marker still says
   `awaiting-reviewer` is benign: the reviewer's mid-edit saves trip the watcher, and the
   marker check makes the author re-arm.
@@ -217,11 +217,11 @@ agent can play the reviewer too — `AGENTS.md` points it at the same protocol.
 
 Point the author at a PR instead of a local doc:
 
-    /dual-review https://github.com/<owner>/<repo>/pull/<n>
+    /multi-review https://github.com/<owner>/<repo>/pull/<n>
 
 (Also accepts `<owner>/<repo>#<n>` and, for the current repo, `#<n>`.) The author fetches the
 PR's description + diff via `gh` into a gitignored scratch file
-`.dual-agent/reviews/<owner>/<repo>/pr-<n>.md`, then the **same** marker/watcher/wait flow
+`.multi-review/reviews/<owner>/<repo>/pr-<n>.md`, then the **same** marker/watcher/wait flow
 converges with your reviewer on that local file. The reviewer never touches GitHub. On
 convergence the author stops at the human gate; only on your approval does it post **one
 neutral** `gh pr review --comment` back to the PR. Agreed findings that carry a
@@ -232,7 +232,7 @@ to the PR.
 
 ## Optional: drive the reviewer via the Codex plugin
 
-The **autonomous route is the default** (see "Autonomous review" below): `/dual-review` already
+The **autonomous route is the default** (see "Autonomous review" below): `/multi-review` already
 dispatches the reviewer for you in one unattended session, and for the `codex` provider it does
 so via this same Codex-plugin transport under the hood. The two-session manual flow above is
 what you get on degradation (the selected provider isn't available), via `--attended`, or by
@@ -246,27 +246,27 @@ the local Codex CLI authenticated; it lets you **summon the reviewer from the au
 skipping the second session and the window-switching.
 
 This changes only *how the reviewer is invoked*, never *what the review is*. Codex runs its own
-`/dual-review` reviewer skill in its **own context** — so reviewer independence (a different
+`/multi-review` reviewer skill in its **own context** — so reviewer independence (a different
 model family, separate reasoning) and the **human approval gate** are intact, and the
 file-coordination protocol remains the source of truth.
 
 **Manual vs plugin is not a setting — it's a per-turn choice.** There is no flag or marker that
 selects between them; the author side keys only on the marker and cannot tell which transport
-produced a reviewer turn. To use the manual route, open a separate session and run `/dual-review
+produced a reviewer turn. To use the manual route, open a separate session and run `/multi-review
 <doc>`; to use the plugin, run the helper below and hand its prompt to `/codex:rescue`. You may
 even switch between them across rounds on the same doc — the marker and threads are the only
 state. (Distinct from the `asymmetric` vs `peer-review` *mode* reported by
-`scripts/dual-agent-peer.sh mode`, which the doc itself selects — see "Peer review" in
-`docs/dual-agent-review.md`.)
+`scripts/multi-review-peer.sh mode`, which the doc itself selects — see "Peer review" in
+`docs/multi-review.md`.)
 
 From the armed author session, get the canonical reviewer prompt and hand it to the plugin
 (the author runs this in its plugin context, where `${CLAUDE_PLUGIN_ROOT}` is set; from a plain
 clone, use the bare `scripts/…` path instead):
 
-    ${CLAUDE_PLUGIN_ROOT}/scripts/dual-agent-reviewer.sh prompt docs/specs/2026-06-09-my-feature.md
+    ${CLAUDE_PLUGIN_ROOT}/scripts/multi-review-reviewer.sh prompt docs/specs/2026-06-09-my-feature.md
 
-> **Migration:** `dual-agent-codex-prompt.sh` was removed in favour of
-> `dual-agent-reviewer.sh prompt <doc>`, which emits the same prompt for Codex and a
+> **Migration:** `multi-review-codex-prompt.sh` was removed in favour of
+> `multi-review-reviewer.sh prompt <doc>`, which emits the same prompt for Codex and a
 > provider-appropriate one for `fable`/`gemini`.
 
 Paste the output into the plugin as a background reviewer turn (`--wait` blocks until Codex is
@@ -282,26 +282,26 @@ Pinning the model keeps the reviewer — and its disclosure line — a real, con
 The helper only **prints** the prompt — a bash script cannot invoke a Claude Code slash command,
 and it never touches the doc, the marker, or the network. The prompt is mode-agnostic: it points
 Codex at its own skill, which detects asymmetric vs peer-review mode, so it never drifts from
-`.agents/skills/dual-review/SKILL.md`. Re-run the helper each round (the abs path is stable).
+`.agents/skills/multi-review/SKILL.md`. Re-run the helper each round (the abs path is stable).
 
 **Trade-offs.** This folds an externally-versioned dependency (the plugin + Codex CLI + model
 drift) into a flow the core deliberately keeps self-contained and offline, and Codex invocations
 count against your Codex usage/billing. It is a convenience layer, not a replacement — the manual
 second-session route remains fully supported for attended review.
 
-## Autonomous review (`/dual-review`, unattended by default)
+## Autonomous review (`/multi-review`, unattended by default)
 
-`/dual-review <doc-or-PR>` runs the **entire review loop unattended in one session** by
+`/multi-review <doc-or-PR>` runs the **entire review loop unattended in one session** by
 default — Claude takes the author turns and dispatches the reviewer for each reviewer turn —
 until the marker reaches `converged`/`exhausted`, then stops at the **human gate** (and, in PR
 mode, the human-gated publish). It covers both asymmetric and peer-review modes. Pass
 `--attended` to fall back to the manual, two-session handoff instead.
 
-    /dual-review docs/specs/2026-06-09-my-feature.md
+    /multi-review docs/specs/2026-06-09-my-feature.md
 
-The reviewer provider is selected with `DUAL_AGENT_REVIEWER` (`codex`, `fable`, or `gemini`;
+The reviewer provider is selected with `MULTI_REVIEW_REVIEWER` (`codex`, `fable`, or `gemini`;
 defaults to `codex`) or a per-invocation `--reviewer <id>` flag. Each provider's model comes
-from the registry and can be overridden with `DUAL_AGENT_REVIEWER_MODEL` — see "Which model
+from the registry and can be overridden with `MULTI_REVIEW_REVIEWER_MODEL` — see "Which model
 each provider runs" above. The `codex` default is non-empty on purpose: an unset model lets
 the `codex:codex-rescue` agent's Claude `sonnet` wrapper answer instead of a GPT model.
 
@@ -313,8 +313,8 @@ Safety — two different failures, handled two different ways, deliberately:
 
 - **A turn that ran but cannot be trusted → the loop stops and surfaces.** No retry, no faked
   progress. That covers a reviewer that didn't flip the marker, an illegal marker transition,
-  or a malformed doc (all enforced by `scripts/dual-agent-auto-step.sh`), plus a
-  **reviewer-identity mismatch**: after each turn, `dual-agent-reviewer.sh verify-vendor`
+  or a malformed doc (all enforced by `scripts/multi-review-auto-step.sh`), plus a
+  **reviewer-identity mismatch**: after each turn, `multi-review-reviewer.sh verify-vendor`
   compares the `> — via` disclosures the turn added against the selected provider's vendor, so
   a turn taken by a different vendor's model than the one you chose halts the review rather
   than being silently accepted.
