@@ -30,8 +30,6 @@ D="$(mkdoc peer.md '<!-- dual-agent-mode: peer-review -->')"
 out="$(bash "$SUT" mode "$D" 2>/dev/null)"; [[ -z "$out" ]] && ok "mode: peer hint defers" || bad "mode peer leaked (got '$out')"
 
 # --- resolve-set ---
-REVSH="${DIR}/dual-agent-reviewer.sh"   # star shells out to the registry
-
 # flag beats env; dedup; order preserved
 out="$(DUAL_AGENT_REVIEWERS="fable" bash "$SUT" resolve-set --reviewers codex,gemini,codex 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
 [[ "$out" == "codex gemini " ]] && ok "resolve-set: flag>env, dedup, order" || bad "resolve-set flag (got '$out')"
