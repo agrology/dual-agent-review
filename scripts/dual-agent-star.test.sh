@@ -64,6 +64,44 @@ echo "$out" | grep -qE '^fable yes$' && ok "available: fable yes" || bad "availa
 ids="$(echo "$out" | cut -d' ' -f1 | tr '\n' ' ')"
 [[ "$ids" == "codex fable gemini " ]] && ok "available: lists all three in order" || bad "available order (got '$ids')"
 
+# --- _table / open-findings ---
+# helper: build a star doc body after ## Review
+mkrev() { local p="${WORK}/$1"; shift; { echo "# Doc"; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; printf '%s\n' "$@"; } > "$p"; echo "$p"; }
+
+# open finding (no response) is open
+D="$(mkrev open.md '> [finding:codex-rd1-r1|high] missing validation' '> — via gpt-5.5' '> — risk: rce')"
+out="$(bash "$SUT" open-findings "$D" 2>/dev/null | tr '\n' ' ')"
+[[ "$out" == "codex-rd1-r1 " ]] && ok "open-findings: unresponded is open" || bad "star open (got '$out')"
+
+# agreed + disputed are NOT open (primary responds; different model from the secondary)
+D="$(mkrev settled.md \
+  '> [finding:codex-rd1-r1|high] a' '> — via gpt-5.5' '> — risk: r' '>' '> [agree:codex-rd1-r1]' '> — via claude-opus-4-8' \
+  '' '> [finding:gemini-rd1-r1|med] b' '> — via gemini' '> — risk: r' '>' '> [dispute:gemini-rd1-r1] no' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" open-findings "$D" 2>/dev/null | tr '\n' ' ')"
+[[ "$out" == "" ]] && ok "open-findings: agree/dispute settle" || bad "star settled (got '$out')"
+
+# THREE distinct models is fine (no 2-model cap): 2 secondaries + primary
+D="$(mkrev threemodels.md \
+  '> [finding:codex-rd1-r1|high] a' '> — via gpt-5.5' '> — risk: r' '>' '> [agree:codex-rd1-r1]' '> — via claude-opus-4-8' \
+  '' '> [finding:gemini-rd1-r1|low] b' '> — via gemini' '> — risk: r' '>' '> [agree:gemini-rd1-r1]' '> — via claude-opus-4-8')"
+bash "$SUT" open-findings "$D" >/dev/null 2>&1 && ok "open-findings: 3 models allowed (no cap)" || bad "star 3-model cap leaked in"
+
+# missing via -> hard error
+D="$(mkrev nodisc.md '> [finding:codex-rd1-r1|high] a')"
+bash "$SUT" open-findings "$D" >/dev/null 2>&1 && bad "missing via should hard-error" || ok "open-findings: missing via hard-errors"
+
+# bad severity -> hard error
+D="$(mkrev badsev.md '> [finding:codex-rd1-r1|urgent] a' '> — via gemini' '> — risk: r')"
+bash "$SUT" open-findings "$D" >/dev/null 2>&1 && bad "bad severity should hard-error" || ok "open-findings: bad severity hard-errors"
+
+# finding whose via line is the LAST line (no risk line follows) -> hard error (r6: END must guard awaiting_risk)
+D="$(mkrev norisk_eof.md '> [finding:codex-rd1-r1|high] a' '> — via gemini')"
+bash "$SUT" open-findings "$D" >/dev/null 2>&1 && bad "missing risk at EOF should hard-error" || ok "open-findings: missing risk at EOF hard-errors"
+
+# duplicate finding id -> hard error
+D="$(mkrev dupe.md '> [finding:codex-rd1-r1|high] a' '> — via gemini' '> — risk: r' '' '> [finding:codex-rd1-r1|high] b' '> — via gemini' '> — risk: r')"
+bash "$SUT" open-findings "$D" >/dev/null 2>&1 && bad "dup id should hard-error" || ok "open-findings: duplicate id hard-errors"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

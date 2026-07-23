@@ -129,12 +129,97 @@ cmd_available() {
   done
 }
 
+# _table <doc> : print "id\traiser\tstate\tresponder\tconcern\twhy\tsev\trisk" per finding
+# (state: open|agreed|dissent). Parses ONLY the last ## Review section (review_section), fences
+# stripped. Verbs are finding|agree|dispute (star has N secondaries + primary, so there is no
+# 2-model cap — that is peer.sh's rule). Enforces the self-response guard: a primary must not
+# respond to a finding disclosed under its own model id. On any grammar violation, prints an
+# error to stderr and exits 2. Pure awk (portable associative arrays); control line + its
+# required "> — via" line are consumed as a pair.
+_table() { # <doc> -> "id\traiser\tstate\tresponder\tconcern\twhy\tsev\trisk" per finding
+  local doc="${1:?doc}" ufl rstart
+  [[ -f "$doc" ]] || die "doc not found: $doc" 1
+  ufl="$(review_section "$doc" | unterminated_fence_line /dev/stdin)"
+  if [[ -n "$ufl" ]]; then
+    rstart="$(review_section_start "$doc")"
+    die "unterminated code fence in ## Review (file line $((rstart + ufl))): findings after it are invisible — close the fence" 1
+  fi
+  review_section "$doc" | strip_fences /dev/stdin | awk '
+    function fail(m){ print "dual-agent-star: " m > "/dev/stderr"; exit 2 }
+    function parse(line,   s, c, rest, b, p) {
+      if (line !~ /^> \[(finding|agree|dispute):[A-Za-z0-9_-]+([|][^]]*)?]/) return 0
+      s = substr(line, 4)
+      c = index(s, ":"); V = substr(s, 1, c-1)
+      rest = substr(s, c+1)
+      b = index(rest, "]"); I = substr(rest, 1, b-1)
+      WHY = substr(rest, b+1); sub(/^ /, "", WHY)
+      SEV = ""; p = index(I, "|")
+      if (p > 0) { SEV = substr(I, p+1); I = substr(I, 1, p-1) }
+      return 1
+    }
+    {
+      line = $0
+      if (pend) {
+        if (line ~ /^> — via /) {
+          m = line; sub(/^> — via[ ]*/, "", m); gsub(/^[ \t]+|[ \t]+$/, "", m)
+          if (m == "") fail("missing model id after " pv ":" pi)
+          if (pv == "finding") {
+            if (psev != "high" && psev != "med" && psev != "low") fail("finding " pi " needs a |high, |med, or |low severity tag")
+            if (pi in raiser) fail("duplicate finding id: " pi)
+            stripped = pwhy; gsub(/^[ \t]+|[ \t]+$/, "", stripped)
+            if (stripped == "") fail("empty concern for finding: " pi)
+            raiser[pi] = m; fwhy[pi] = pwhy; fsev[pi] = psev; order[++n] = pi
+            awaiting_risk = 1; risk_for = pi        # a finding must be followed by its risk line
+          } else {
+            if (psev != "") fail("severity tag not allowed on " pv ": " pi)
+            if (pi in rverb) fail("multiple responses to finding: " pi)
+            rverb[pi] = pv; rmodel[pi] = m; rwhy[pi] = pwhy
+          }
+          pend = 0; next
+        } else {
+          fail("control line " pv ":" pi " not followed by a \"> — via <model>\" line")
+        }
+      }
+      if (awaiting_risk) {
+        awaiting_risk = 0
+        if (line ~ /^> — risk:/) {
+          rk = line; sub(/^> — risk:[ ]*/, "", rk); gsub(/[ \t]+$/, "", rk)
+          if (rk == "") fail("empty risk for finding: " risk_for)
+          frisk[risk_for] = rk; next
+        } else { fail("finding " risk_for " not followed by a \"> — risk: <risk>\" line") }
+      }
+      if (parse(line)) { pv = V; pi = I; pwhy = WHY; psev = SEV; pend = 1 }
+    }
+    END {
+      if (pend) fail("control line " pv ":" pi " not followed by a \"> — via <model>\" line")
+      if (awaiting_risk) fail("finding " risk_for " not followed by a \"> — risk: <risk>\" line")
+      for (id in rverb) if (!(id in raiser)) fail("response to unknown finding id: " id)
+      for (i = 1; i <= n; i++) {
+        id = order[i]
+        if (id in rverb && rmodel[id] == raiser[id]) fail("self-response on finding: " id)
+        state = "open"
+        if (rverb[id] == "agree") state = "agreed"
+        else if (rverb[id] == "dispute") state = "dissent"
+        resp = (id in rmodel) ? rmodel[id] : ""
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, raiser[id], state, resp, fwhy[id], rwhy[id], fsev[id], frisk[id]
+      }
+    }
+  '
+}
+
+cmd_open_findings() { # <doc> -> ids with state==open
+  local doc="${1:?doc}" t
+  t="$(_table "$doc")" || exit $?
+  printf '%s\n' "$t" | awk -F'\t' '$3 == "open" { print $1 }'
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     mode) cmd_mode "$@" ;;
     resolve-set) cmd_resolve_set "$@" ;;
     available) cmd_available "$@" ;;
+    open-findings) cmd_open_findings "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
