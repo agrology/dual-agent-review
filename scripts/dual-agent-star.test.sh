@@ -29,6 +29,29 @@ out="$(bash "$SUT" mode "$D" 2>/dev/null)"; rc=$?
 D="$(mkdoc peer.md '<!-- dual-agent-mode: peer-review -->')"
 out="$(bash "$SUT" mode "$D" 2>/dev/null)"; [[ -z "$out" ]] && ok "mode: peer hint defers" || bad "mode peer leaked (got '$out')"
 
+# --- resolve-set ---
+REVSH="${DIR}/dual-agent-reviewer.sh"   # star shells out to the registry
+
+# flag beats env; dedup; order preserved
+out="$(DUAL_AGENT_REVIEWERS="fable" bash "$SUT" resolve-set --reviewers codex,gemini,codex 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+[[ "$out" == "codex gemini " ]] && ok "resolve-set: flag>env, dedup, order" || bad "resolve-set flag (got '$out')"
+
+# env used when no flag
+out="$(DUAL_AGENT_REVIEWERS="gemini fable" bash "$SUT" resolve-set 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+[[ "$out" == "gemini fable " ]] && ok "resolve-set: env set" || bad "resolve-set env (got '$out')"
+
+# unknown id -> exit 2
+DUAL_AGENT_REVIEWERS="codex bogus" bash "$SUT" resolve-set >/dev/null 2>&1
+[[ $? -eq 2 ]] && ok "resolve-set: unknown id -> exit 2" || bad "resolve-set unknown exit"
+
+# empty set -> exit 3, no output (not star)
+out="$(bash "$SUT" resolve-set 2>/dev/null)"; rc=$?
+[[ -z "$out" && $rc -eq 3 ]] && ok "resolve-set: empty -> exit 3 not-star" || bad "resolve-set empty (out='$out' rc=$rc)"
+
+# rows are full registry rows
+out="$(bash "$SUT" resolve-set --reviewers gemini 2>/dev/null)"
+[[ "$out" == "gemini|google|shell|"*"|no" ]] && ok "resolve-set: full row" || bad "resolve-set row (got '$out')"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

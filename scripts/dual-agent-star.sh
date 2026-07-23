@@ -84,10 +84,45 @@ cmd_mode() { # <doc> -> "star" or defer (empty, exit 1)
   echo "star"
 }
 
+STAR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REVIEWER_SH="${STAR_DIR}/dual-agent-reviewer.sh"
+
+# parse_set [--reviewers csv] -> echoes the raw id list (space-separated), flag>env precedence
+parse_set() {
+  local csv=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reviewers) [[ $# -ge 2 ]] || die "--reviewers requires a value" 2; csv="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ -n "$csv" ]]; then
+    printf '%s' "$csv" | tr ',' ' '
+  else
+    printf '%s' "${DUAL_AGENT_REVIEWERS:-}"
+  fi
+}
+
+cmd_resolve_set() {
+  local raw seen="" id row out=""
+  raw="$(parse_set "$@")"
+  # normalize whitespace; dedup preserving order
+  for id in $raw; do
+    case " $seen " in *" $id "*) continue ;; esac
+    seen="$seen $id"
+    row="$("$REVIEWER_SH" resolve --reviewer "$id" 2>/dev/null)" \
+      || die "unknown reviewer provider in set: ${id}" 2
+    out="${out}${row}"$'\n'
+  done
+  [[ -n "$out" ]] || exit 3            # empty set -> not star mode
+  printf '%s' "$out"
+}
+
 main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     mode) cmd_mode "$@" ;;
+    resolve-set) cmd_resolve_set "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
