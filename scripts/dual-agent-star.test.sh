@@ -210,6 +210,26 @@ awk '
 ' "$D" > "$D.x" && mv "$D.x" "$D"
 bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "clean erasure should fail (r9/guard-b)" || ok "check-converged: clean erasure fails (r9, guard-b)"
 
+# --- c1: single consistent primary ---
+# Coverage (guard a) requires one response per finding, and _table's self-response guard
+# already blocks a finding's own raiser from answering it -- but neither pins ALL responses to
+# ONE consistent identity. Build a 2-finding doc (like mkconv2) where each finding is answered
+# by a DIFFERENT non-raiser model -- this must NOT converge (one primary must reason about
+# every finding). mkconv2's happy-path test above is the companion: both findings answered by
+# the SAME primary (claude-opus-4-8) there, and it passes.
+mkconv_multiprimary() {  # -> merged doc w/ 2 findings, agreed by TWO DIFFERENT responder models
+  local base="${WORK}/$1"
+  { echo "# Doc"; echo '<!-- dual-agent-review: awaiting-primary · round 1/2 -->'; echo '<!-- dual-agent-mode: star -->'; echo; echo "## Review"; echo; } > "$base"
+  mkcopy "${base}.codex"  '> [finding:r1|high] alpha' '> — via gpt-5.5' '> — risk: ra'
+  mkcopy "${base}.gemini" '> [finding:r1|med] beta'   '> — via gemini'  '> — risk: rb'
+  bash "$SUT" merge --round 1 "$base" "${base}.codex" "${base}.gemini" >/dev/null 2>&1
+  { echo '> [agree:codex-rd1-r1]'; echo '> — via claude-opus-4-8'; echo '> [agree:gemini-rd1-r1]'; echo '> — via claude-sonnet-5'; } >> "$base"
+  sed -i.bak 's/awaiting-primary/converged/' "$base" && rm -f "${base}.bak"
+  echo "$base"
+}
+D="$(mkconv_multiprimary conv-multiprimary.md)"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && bad "two different responder models should fail (c1)" || ok "check-converged: two different responder models fails (c1)"
+
 # --- injection r9: extra [finding:] whose ns-id is NOT in the manifest ---
 # Fully grammar-valid and fully responded (so coverage passes and _table is clean) — the
 # only thing wrong is that this ns-id was never merged, so it's absent from the manifest.

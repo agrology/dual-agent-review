@@ -379,6 +379,17 @@ cmd_check_converged() {
   done < <(awk '$1=="quarantine"{print $2}' "${doc}.manifest")
   [[ $qmiss -eq 0 ]] || exit 1
 
+  # (e) single primary (c1): every response must come from the SAME model. Guard (a) already
+  #     requires one response per finding and _table's self-response guard already blocks a
+  #     finding's own raiser from answering it — but neither pins all responses to ONE
+  #     consistent identity, so finding A could be answered by model X and finding B by a
+  #     different model Y (both non-raisers) and still "converge". Collect the distinct
+  #     non-empty responder ids (column 4) across all findings; more than one -> not converged.
+  #     Zero is fine (zero findings -> zero responders; coverage already forbids a partial mix).
+  local distinct_responders
+  distinct_responders="$(printf '%s\n' "$t" | awk -F'\t' 'NF>=4 && $4!="" {print $4}' | sort -u | grep -c .)"
+  [[ "$distinct_responders" -le 1 ]] || exit 1
+
   exit 0
 }
 
