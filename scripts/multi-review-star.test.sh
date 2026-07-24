@@ -398,6 +398,37 @@ out="$(bash "$SUT" gate-summary "$FABLE_QUARANTINED_CODEX_DOC" claude-opus-4-8 -
 printf '%s' "$out" | grep -q "attempted but quarantined" && printf '%s' "$out" | grep -q "codex" \
   && ok "independence: attempted-but-quarantined names codex" || bad "independence attempted-but-quarantined"
 
+## --- observations (Task A3) ---
+# a doc with one agreed finding + a primary observation
+D="$(mkstar obs.md \
+  '> [finding:codex-rd1-a|med] a concern' '> — via gpt-5.5' '> — risk: some risk' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8' \
+  '> [observation] secondaries all missed the retry cap' '> — via claude-opus-4-8')"
+# the observation is NOT a finding: the sole finding is agreed, so there is no open finding
+[[ -z "$(bash "$SUT" open-findings "$D" 2>/dev/null)" ]] && ok "observations: not counted as a finding" || bad "observation leaked as finding"
+# observations lists it
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"
+[[ "$out" == "secondaries all missed the retry cap" ]] && ok "observations: listed" || bad "observations list (got '$out')"
+# gate-summary shows it under the observations heading
+# (capture first, then grep the captured string — piping bash "$SUT" ... | grep -q directly
+# races under `set -o pipefail`: grep -q exits the instant it matches this early-ish line,
+# closing the pipe while the multi-process writer is still emitting later lines, so the
+# writer dies with SIGPIPE (141) and pipefail promotes that over grep's 0 — same class of
+# bug as `yes | head -1` under pipefail. Same capture-then-grep idiom used everywhere else
+# in this file.)
+out="$(bash "$SUT" gate-summary "$D" claude-opus-4-8 2>/dev/null)"
+printf '%s' "$out" | grep -q "Primary observations (human-gate only)" && ok "observations: in gate-summary" || bad "observations gate-summary"
+
+# an observation added to an otherwise-converged doc must not affect check-converged
+D="$(mkconv conv-with-obs.md)"
+{ echo '> [observation] a note for the human gate'; echo '> — via claude-opus-4-8'; } >> "$D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && ok "check-converged: observation does not block convergence" || bad "check-converged: observation broke convergence"
+[[ -z "$(bash "$SUT" open-findings "$D" 2>/dev/null)" ]] && ok "observations: open-findings still empty alongside observation" || bad "observations: leaked into open-findings"
+
+# a doc with NO observations -> gate-summary output byte-identical to before (dormant/additive)
+out_noobs="$(bash "$SUT" gate-summary "$G" claude-opus-4-8 2>/dev/null)"
+printf '%s' "$out_noobs" | grep -q "Primary observations" && bad "observations heading leaked with no observations" || ok "observations: heading absent when no observations (dormant)"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

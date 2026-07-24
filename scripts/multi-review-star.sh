@@ -226,6 +226,25 @@ cmd_open_findings() { # <doc> -> ids with state==open
   printf '%s\n' "$t" | awk -F'\t' '$3 == "open" { print $1 }'
 }
 
+# cmd_observations <doc> -> observation text per line. A primary observation is a human-gate-only
+# note, NOT a finding: `> [observation] <text>` + required `> — via <model>` pair, in ## Review.
+# Never parsed by _table (verb set stays finding|agree|dispute) — never enters the manifest,
+# never affects check-converged.
+cmd_observations() { # <doc> -> observation text per line
+  local doc="${1:?doc}"
+  [[ -f "$doc" ]] || die "doc not found: $doc" 1
+  review_section "$doc" | strip_fences /dev/stdin | awk '
+    {
+      line = $0
+      if (pend) {
+        if (line ~ /^> — via /) { print ptxt; pend = 0; next }
+        else { pend = 0 }
+      }
+      if (line ~ /^> \[observation] /) { ptxt = line; sub(/^> \[observation] /, "", ptxt); pend = 1 }
+    }
+  '
+}
+
 provider_of_copy() { # <doc> <copy> -> provider (exact suffix after "<doc>.")
   local doc="$1" copy="$2"
   local p="${copy#${doc}.}"   # exact prefix strip (r8), not ${##*.}
@@ -448,6 +467,17 @@ cmd_gate_summary() {
   # agreed findings, compactly
   printf '%s\n' "$t" | awk -F'\t' '
     $3=="agreed"{ printf "  agreed: %s — %s (via %s)\n", $7, $5, $2 }'
+
+  # primary observations (human-gate only): never a finding, never affects convergence — dormant
+  # (no heading printed) when the doc has none, so gate-summary is byte-identical without them.
+  local obs
+  obs="$(cmd_observations "$doc")"
+  if [[ -n "$obs" ]]; then
+    echo "Primary observations (human-gate only):"
+    printf '%s\n' "$obs" | while IFS= read -r line; do echo "  - $line"; done
+    echo
+  fi
+
   echo "———"
   echo "🤖 Star review gate summary — primary ${primary}. Human gate decides; nothing auto-merges."
 
@@ -481,6 +511,7 @@ main() {
     resolve-set) cmd_resolve_set "$@" ;;
     available) cmd_available "$@" ;;
     open-findings) cmd_open_findings "$@" ;;
+    observations) cmd_observations "$@" ;;
     merge) cmd_merge "$@" ;;
     check-converged) cmd_check_converged "$@" ;;
     gate-summary) cmd_gate_summary "$@" ;;
