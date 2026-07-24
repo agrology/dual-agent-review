@@ -34,9 +34,8 @@ provider_row() { # <id> -> "id|vendor|dispatch-kind|model|has-skill"
   esac
 }
 
-# Map an arbitrary disclosed model id to a vendor. Used by both `notice` (author side) and
-# `verify-vendor` (reviewer side). Returns 1 when unmappable — callers must treat that as a
-# loud failure, never as a silent pass.
+# Map an arbitrary disclosed model id to a vendor. Used by `verify-vendor` (reviewer side).
+# Returns 1 when unmappable — callers must treat that as a loud failure, never as a silent pass.
 #
 # Each family accepts the BARE id as well as the versioned one. A CLI that reports a family
 # name with no version suffix is common in practice — Gemini discloses `gemini`, and Codex's
@@ -55,7 +54,7 @@ field() { # <row> <n>
   echo "$1" | cut -d'|' -f"$2"
 }
 
-resolve_id() { # [--reviewer <id>] -> the selected provider id
+resolve_id() { # --reviewer <id> -> the selected provider id (required; no default)
   local id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -68,11 +67,11 @@ resolve_id() { # [--reviewer <id>] -> the selected provider id
       *)  shift ;;
     esac
   done
-  [[ -n "$id" ]] || id="${MULTI_REVIEW_REVIEWER:-codex}"
+  [[ -n "$id" ]] || die "--reviewer <id> is required" 2
   echo "$id"
 }
 
-resolve_row() { # [--reviewer <id>] -> the full row, or die 2
+resolve_row() { # --reviewer <id> -> the full row, or die 2
   local id rc row
   id="$(resolve_id "$@")"; rc=$?
   # resolve_id runs inside this command substitution's own subshell, so a `die` inside it
@@ -88,7 +87,7 @@ resolve_row() { # [--reviewer <id>] -> the full row, or die 2
 
 cmd_resolve() { resolve_row "$@"; }
 
-cmd_check() { # [--reviewer <id>] -> 0 dispatchable, 1 with reason
+cmd_check() { # --reviewer <id> -> 0 dispatchable, 1 with reason
   local row id
   row="$(resolve_row "$@")" || exit 2
   id="$(field "$row" 1)"
@@ -163,9 +162,9 @@ Then stop and report which ids you added and that the marker was flipped.
 PROMPT
 }
 
-cmd_prompt() { # <doc> [--reviewer <id>]
+cmd_prompt() { # <doc> --reviewer <id>
   local doc="${1:-}"
-  [[ -n "$doc" ]] || die "usage: multi-review-reviewer.sh prompt <doc-path> [--reviewer <id>]" 2
+  [[ -n "$doc" ]] || die "usage: multi-review-reviewer.sh prompt <doc-path> --reviewer <id>" 2
   shift
   [[ -f "$doc" ]] || die "doc not found: $doc" 2
   local row has_skill
@@ -174,9 +173,9 @@ cmd_prompt() { # <doc> [--reviewer <id>]
   emit_prompt "$(abs_path "$doc")" "$has_skill"
 }
 
-cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
+cmd_command() { # <doc> --reviewer <id> -> NUL-delimited argv
   local doc="${1:-}"
-  [[ -n "$doc" ]] || die "usage: multi-review-reviewer.sh command <doc-path> [--reviewer <id>]" 2
+  [[ -n "$doc" ]] || die "usage: multi-review-reviewer.sh command <doc-path> --reviewer <id>" 2
   shift
   [[ -f "$doc" ]] || die "doc not found: $doc" 2
   local row id kind model has_skill prompt
@@ -209,25 +208,6 @@ cmd_vendor_of_model() { # <model-id> -> vendor, or exit 1 if unmappable
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: multi-review-reviewer.sh vendor-of-model <model-id>" 2
   vendor_of_model "$id" || die "cannot determine vendor from '${id}'" 1
-}
-
-cmd_notice() { # <author-model-id> [--reviewer <id>] -> one line or nothing; always exit 0
-  local author="${1:-}"
-  [[ -n "$author" ]] || die "usage: multi-review-reviewer.sh notice <author-model-id> [--reviewer <id>]" 2
-  shift
-  local row rid rvendor avendor
-  row="$(resolve_row "$@")" || exit 2
-  rid="$(field "$row" 1)"; rvendor="$(field "$row" 2)"
-  if ! avendor="$(vendor_of_model "$author")"; then
-    # Never silent on failure: silence from this command must always mean "checked and
-    # cross-vendor", so an unmappable id says so out loud instead of looking like a pass.
-    echo "note: cannot determine author vendor from '${author}' — same-vendor status unverified"
-    return 0
-  fi
-  if [[ "$avendor" == "$rvendor" ]]; then
-    echo "note: same-vendor review — author (${author}) and reviewer (${rid}) are both ${rvendor}; independence is contextual (fresh context, different weights), not architectural"
-  fi
-  return 0
 }
 
 # Disclosure-shaped lines inside fenced code blocks are documentation, not protocol. This is a
@@ -309,7 +289,7 @@ via_ids() { # <file> -> disclosed model ids, one per line, sorted — DUPLICATES
     | sort
 }
 
-cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
+cmd_verify_vendor() { # --baseline <snap> <doc> --reviewer <id>
   local base="" doc=""
   local -a rest
   rest=()
@@ -329,7 +309,7 @@ cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
   [[ -n "$base" ]] \
     || die "verify-vendor requires --baseline <snapshot> (refusing to scan the whole doc)" 2
   [[ -f "$base" ]] || die "baseline snapshot not found: $base" 2
-  [[ -n "$doc"  ]] || die "usage: multi-review-reviewer.sh verify-vendor --baseline <snap> <doc> [--reviewer <id>]" 2
+  [[ -n "$doc"  ]] || die "usage: multi-review-reviewer.sh verify-vendor --baseline <snap> <doc> --reviewer <id>" 2
   [[ -f "$doc"  ]] || die "doc not found: $doc" 2
 
   # An identity check that cannot parse a doc must not report "pass" — refuse both files.
@@ -370,14 +350,13 @@ cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
 }
 
 # --- dispatch -------------------------------------------------------------
-sub="${1:-}"; [[ -n "$sub" ]] || die "usage: multi-review-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor|vendor-of-model> [args]" 2
+sub="${1:-}"; [[ -n "$sub" ]] || die "usage: multi-review-reviewer.sh <resolve|check|prompt|command|verify-vendor|vendor-of-model> [args]" 2
 shift
 case "$sub" in
   resolve) cmd_resolve "$@" ;;
   check)   cmd_check "$@" ;;
   prompt)  cmd_prompt "$@" ;;
   command) cmd_command "$@" ;;
-  notice)  cmd_notice "$@" ;;
   verify-vendor) cmd_verify_vendor "$@" ;;
   vendor-of-model) cmd_vendor_of_model "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
