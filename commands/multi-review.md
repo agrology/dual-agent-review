@@ -138,7 +138,12 @@ re-resolve later (a mutable env var could otherwise swap providers mid-review un
             argv=()
             while IFS= read -r -d '' a; do argv+=("$a"); done \
               < <("${CLAUDE_PLUGIN_ROOT}/scripts/multi-review-reviewer.sh" command "<doc>.<id>" --reviewer <id>)
-            "${argv[@]}"
+            # Guard the empty case BEFORE expanding: on macOS bash 3.2 under `set -u`,
+            # "${argv[@]}" on a zero-element array is a fatal unbound-variable error. An empty
+            # argv means the command could not be built — treat it as a dispatch failure for
+            # this provider (quarantine it) rather than expanding.
+            (( ${#argv[@]} )) || { : quarantine <id> "could not build reviewer command"; }
+            (( ${#argv[@]} )) && "${argv[@]}"
 
    All same-turn subagent dispatches go in the SAME response block as each other.
 4. **Bound the wait, per copy.**
