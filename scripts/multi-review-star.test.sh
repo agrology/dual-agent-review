@@ -387,6 +387,17 @@ printf '%s' "$out" | grep -q "no independent cross-vendor perspective" && bad "i
 a="$(bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 2>/dev/null)"
 printf '%s' "$a" | grep -q "cross-vendor" && bad "independence leaked without flag" || ok "independence: opt-in only"
 
+# FABLE_QUARANTINED_CODEX_DOC: only same-vendor (fable) admitted, but a cross-vendor (codex)
+# secondary was attempted and quarantined -> distinct "attempted but quarantined" message
+# naming codex, not the generic same-vendor-only warning.
+FABLE_QUARANTINED_CODEX_DOC="$(mkstar fabledoc-qcodex.md \
+  '> [finding:fable-rd1-a|low] same-vendor concern' '> — via claude-fable-5' '> — risk: some risk' \
+  '> [agree:fable-rd1-a]' '> — via claude-opus-4-8' \
+  '<!-- star-quarantined: codex · identity-fail · round 1 -->')"
+out="$(bash "$SUT" gate-summary "$FABLE_QUARANTINED_CODEX_DOC" claude-opus-4-8 --flag-independence 2>/dev/null)"
+printf '%s' "$out" | grep -q "attempted but quarantined" && printf '%s' "$out" | grep -q "codex" \
+  && ok "independence: attempted-but-quarantined names codex" || bad "independence attempted-but-quarantined"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
