@@ -294,28 +294,32 @@ finding_block_hash() { # <doc> <ns-id>
 }
 
 # anchor_of <doc> <ns-id> -> "path\tstart\tend" (end may be empty) if that finding's block
-# carries a valid "> — at <path>:<lineinfo>" line, else empty output. Anchor-parse rules mirror
-# multi-review-peer.sh's _table (":[0-9]+(-[0-9]+)?$" split; empty path or end<start rejected)
-# but live in a standalone reader — not folded into _table's column contract (brief: keep _table's
-# 8-column shape untouched). Block-scoping mirrors finding_block_hash's literal index() match.
-anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty
+# carries a valid "> — at <path>:<lineinfo>" line, else empty output (exit 0) — that's the ABSENT
+# case (no "> — at" line at all): the finding falls to the summary, same as always. A PRESENT but
+# MALFORMED anchor (empty path, no numeric ":N"/":N-M" suffix, or end<start) is a contract
+# violation and hard-fails (exit 2, message to stderr) rather than silently degrading — mirrors
+# multi-review-peer.sh's _table fail() on exactly these same rejection conditions. Live in a
+# standalone reader — not folded into _table's column contract (brief: keep _table's 8-column
+# shape untouched). Block-scoping mirrors finding_block_hash's literal index() match.
+anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty; exit 2 on malformed anchor
   local doc="$1" id="$2"
   review_section "$doc" | strip_fences /dev/stdin | awk -v id="$id" '
+    function fail(m){ print "multi-review-star: " m > "/dev/stderr"; exit 2 }
     (index($0, "> [finding:" id "|") == 1 || index($0, "> [finding:" id "]") == 1) { grab=1; next }
     grab && /^> — at / {
       a = $0; sub(/^> — at[ ]*/, "", a); gsub(/[ \t]+$/, "", a)
       if (match(a, /:[0-9]+(-[0-9]+)?$/)) {
         nums = substr(a, RSTART + 1)
         path = substr(a, 1, RSTART - 1)
-        if (path == "") { grab=0; next }
+        if (path == "") fail("empty path in > — at for finding: " id)
         d = index(nums, "-")
         if (d == 0) { st = nums + 0; en = "" }
         else { st = substr(nums, 1, d - 1) + 0; en = substr(nums, d + 1) + 0 }
-        if (en != "" && en < st) { grab=0; next }
+        if (en != "" && en < st) fail("> — at end < start for finding: " id)
         print path "\t" st "\t" en
         exit
       }
-      grab=0; next
+      fail("malformed > — at anchor for finding " id ": " $0)
     }
     grab && /^> — / { next }
     grab { grab=0 }
@@ -379,7 +383,7 @@ cmd_compose_inline() { # <doc> -> "path\tstart\tend\tbody" per agreed+anchored f
     sev="$(awk -F'\t' '{print $7}' <<< "$rec")"
     risk="$(awk -F'\t' '{print $8}' <<< "$rec")"
     [[ "$state" == "agreed" ]] || continue
-    anchor="$(anchor_of "$doc" "$id")"
+    anchor="$(anchor_of "$doc" "$id")" || die "cannot compose inline: contract violation in $doc" 1
     [[ -n "$anchor" ]] || continue
     path="$(awk -F'\t' '{print $1}' <<< "$anchor")"
     start="$(awk -F'\t' '{print $2}' <<< "$anchor")"

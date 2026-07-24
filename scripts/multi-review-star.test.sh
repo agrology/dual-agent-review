@@ -473,6 +473,41 @@ OPEN_DOC="$(mkstar openanchor.md \
 out="$(bash "$SUT" compose-inline "$OPEN_DOC" 2>/dev/null)"
 [[ -z "$out" ]] && ok "compose-inline: open anchored finding excluded" || bad "compose-inline leaked open (got '$out')"
 
+## --- malformed anchor: PRESENT-but-malformed hard-fails; ABSENT falls to summary (fix for the
+## silent-degrade-vs-peer finding). Mirrors multi-review-peer.sh's _table fail() rejection cases.
+
+# (a) ABSENT anchor (no "> — at" line at all) -> compose-inline still succeeds (exit 0) and
+# simply omits the finding from inline output — this is the behavior that must be PRESERVED.
+ABSENT_ANCHOR_DOC="$(mkstar absentanchor.md \
+  '> [finding:codex-rd1-a|low] no anchor at all' '> — via gpt-5.5' '> — risk: r' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" compose-inline "$ABSENT_ANCHOR_DOC" 2>/dev/null)"; rc=$?
+[[ $rc -eq 0 && -z "$out" ]] && ok "compose-inline: absent anchor -> exit 0, falls to summary" || bad "compose-inline absent anchor (rc=$rc out='$out')"
+
+# (b) PRESENT-but-MALFORMED anchors -> compose-inline hard-fails (exit non-zero, contract
+# violation to stderr) instead of silently dropping the finding to the summary.
+EMPTYPATH_DOC="$(mkstar emptypath.md \
+  '> [finding:codex-rd1-a|high] bad anchor - empty path' '> — via gpt-5.5' '> — risk: r' '> — at :42' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+bash "$SUT" compose-inline "$EMPTYPATH_DOC" >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "compose-inline: empty-path anchor hard-fails" || bad "compose-inline empty-path anchor did not fail"
+
+NONNUMERIC_DOC="$(mkstar nonnumeric.md \
+  '> [finding:codex-rd1-a|high] bad anchor - non-numeric suffix' '> — via gpt-5.5' '> — risk: r' '> — at scripts/foo.sh:abc' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+bash "$SUT" compose-inline "$NONNUMERIC_DOC" >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "compose-inline: non-numeric-suffix anchor hard-fails" || bad "compose-inline non-numeric anchor did not fail"
+
+ENDLTSTART_DOC="$(mkstar endltstart.md \
+  '> [finding:codex-rd1-a|high] bad anchor - end < start' '> — via gpt-5.5' '> — risk: r' '> — at scripts/foo.sh:10-5' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+bash "$SUT" compose-inline "$ENDLTSTART_DOC" >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "compose-inline: end<start anchor hard-fails" || bad "compose-inline end<start anchor did not fail"
+
+# stderr carries a contract-violation message (fail-loud), not silence
+err="$(bash "$SUT" compose-inline "$EMPTYPATH_DOC" 2>&1 >/dev/null)"
+printf '%s' "$err" | grep -qi "contract violation" && ok "compose-inline: malformed anchor stderr is fail-loud" || bad "compose-inline malformed anchor stderr (got '$err')"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
