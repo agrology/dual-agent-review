@@ -5,6 +5,7 @@
 #   resolve-set [--reviewers csv]
 #   available
 #   open-findings <doc>
+#   observations <doc>
 #   merge --round N [--quarantined p:reason ...] <doc> <copy> ...
 #   check-converged <doc>
 #   gate-summary <doc> <primary-model-id>
@@ -303,6 +304,11 @@ finding_block_hash() { # <doc> <ns-id>
 # shape untouched). Block-scoping mirrors finding_block_hash's literal index() match.
 anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty; exit 2 on malformed anchor
   local doc="$1" id="$2"
+  # Drains its awk to EOF (no early `exit` on the success path) rather than printing and exiting
+  # immediately — mirrors finding_block_hash's SIGPIPE-safe pattern. An early exit here would
+  # leave review_section/strip_fences writing into a closed pipe once the ## Review section
+  # exceeds the OS pipe buffer, and with `pipefail` set that SIGPIPE surfaces as this function's
+  # exit status, falsely tripping callers' "contract violation" checks on large-but-valid docs.
   review_section "$doc" | strip_fences /dev/stdin | awk -v id="$id" '
     function fail(m){ print "multi-review-star: " m > "/dev/stderr"; exit 2 }
     (index($0, "> [finding:" id "|") == 1 || index($0, "> [finding:" id "]") == 1) { grab=1; next }
@@ -316,13 +322,14 @@ anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty; exit 2 on malforme
         if (d == 0) { st = nums + 0; en = "" }
         else { st = substr(nums, 1, d - 1) + 0; en = substr(nums, d + 1) + 0 }
         if (en != "" && en < st) fail("> — at end < start for finding: " id)
-        print path "\t" st "\t" en
-        exit
+        out = path "\t" st "\t" en
+        grab = 0; next
       }
       fail("malformed > — at anchor for finding " id ": " $0)
     }
     grab && /^> — / { next }
     grab { grab=0 }
+    END { if (out != "") print out }
   '
 }
 

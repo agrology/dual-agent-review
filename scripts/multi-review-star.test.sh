@@ -508,6 +508,37 @@ bash "$SUT" compose-inline "$ENDLTSTART_DOC" >/dev/null 2>&1
 err="$(bash "$SUT" compose-inline "$EMPTYPATH_DOC" 2>&1 >/dev/null)"
 printf '%s' "$err" | grep -qi "contract violation" && ok "compose-inline: malformed anchor stderr is fail-loud" || bad "compose-inline malformed anchor stderr (got '$err')"
 
+## --- anchor_of SIGPIPE false-failure on large docs (finding #1) ---
+# anchor_of's success branch used to `print ...; exit` the moment it found the anchor, without
+# draining review_section/strip_fences to EOF. Once the ## Review section exceeds the OS pipe
+# buffer (~16KB on macOS), the upstream stages are still writing when awk exits, they take
+# SIGPIPE, and with `pipefail` set that surfaces as anchor_of's own exit status — falsely
+# tripping cmd_compose_inline's "contract violation" die() on a perfectly valid, merely large,
+# doc. Build a >32KB ## Review section with the target anchored+agreed finding near the TOP
+# (so it's found early and awk would exit long before the padding below it is drained) and pad
+# with many additional finding/response blocks past the pipe-buffer threshold.
+BIGARGS=(
+  '> [finding:codex-rd1-a|high] anchored concern near top' '> — via gpt-5.5' '> — risk: some risk' '> — at scripts/foo.sh:42' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8'
+)
+for i in $(seq 1 400); do
+  BIGARGS+=(
+    "> [finding:pad-rd1-p${i}|low] padding finding number ${i} with extra filler text to grow the section past typical OS pipe buffers"
+    '> — via gpt-5.5'
+    "> — risk: padding risk ${i}"
+    "> [agree:pad-rd1-p${i}]"
+    '> — via claude-opus-4-8'
+  )
+done
+BIG_DOC="$(mkstar biganchor.md "${BIGARGS[@]}")"
+[[ "$(awk '/^## Review/{f=1;next} f' "$BIG_DOC" | wc -c)" -gt 32768 ]] || bad "test setup: big doc review section not >32KB"
+out="$(bash "$SUT" compose-inline "$BIG_DOC" 2>/dev/null)"; rc=$?
+[[ $rc -eq 0 ]] && ok "compose-inline: large (>32KB) anchored doc exits 0 (no SIGPIPE false-failure)" \
+  || bad "compose-inline large doc rc (got $rc)"
+printf '%s\n' "$out" | grep -qE '^scripts/foo\.sh'$'\t''42'$'\t'$'\t' \
+  && ok "compose-inline: large doc still emits the anchored finding's TSV" \
+  || bad "compose-inline large doc tsv (got '$out')"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"
