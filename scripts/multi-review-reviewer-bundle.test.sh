@@ -17,6 +17,9 @@ else
 fi
 
 # --- reviewer scripts bundled and identical ---
+# The star-only bundle vendors just core.sh today; kept as a loop so adding a vendored script
+# later is a one-line change. (single element by design)
+# shellcheck disable=SC2043
 for s in multi-review-core.sh; do
   if cmp -s "${ROOT}/scripts/${s}" "${SKILL}/scripts/${s}"; then
     ok "bundled script in sync: ${s}"

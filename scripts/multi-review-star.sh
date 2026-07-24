@@ -468,6 +468,10 @@ cmd_merge() {
   for q in "${quarantined[@]:-}"; do
     [[ -z "$q" ]] && continue
     qprovider="${q%%:*}"; qreason="${q#*:}"
+    # Canonical quarantine-record format (parsed by check-converged guard (d), the gate-summary
+    # readability list, and the independence scan): "star-quarantined: <provider> · <reason> ·
+    # round <N>". <provider> is a registry key ([a-z0-9]+); <reason> may contain spaces ([^·]+);
+    # <N> is [0-9]+. Every reader keys off this exact shape — keep them in step if it changes.
     qline="<!-- star-quarantined: ${qprovider} · ${qreason} · round ${round} -->"
     printf '%s\n' "$qline" >> "$doc"           # durable record
     echo "quarantine ${qprovider}-rd${round}=$(printf '%s' "$qline" | sha)" >> "${doc}.manifest.tmp"
@@ -577,7 +581,7 @@ cmd_gate_summary() {
   # quarantined secondaries (readability channel: the in-doc records)
   if grep -qE '^<!-- star-quarantined: ' "$doc"; then
     echo "Quarantined secondaries (findings excluded):"
-    grep -oE '^<!-- star-quarantined: [^·]+· [^·]+· round [0-9]+ -->' "$doc" \
+    grep -oE '^<!-- star-quarantined: [a-z0-9]+ · [^·]+· round [0-9]+ -->' "$doc" \
       | sed -E 's/^<!-- star-quarantined: (.*) -->$/  - \1/'
     echo
   fi
