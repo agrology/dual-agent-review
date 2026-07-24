@@ -17,11 +17,20 @@ else
 fi
 
 # --- reviewer scripts bundled and identical ---
-for s in multi-review-core.sh multi-review-peer.sh multi-review-wait.sh multi-review-watch.sh; do
+for s in multi-review-core.sh; do
   if cmp -s "${ROOT}/scripts/${s}" "${SKILL}/scripts/${s}"; then
     ok "bundled script in sync: ${s}"
   else
     bad "bundled script missing/drifted: ${s}"
+  fi
+done
+
+# --- retired scripts must NOT be vendored (dropped from the star-only bundle) ---
+for s in multi-review-peer.sh multi-review-wait.sh multi-review-watch.sh; do
+  if [[ -e "${SKILL}/scripts/${s}" ]]; then
+    bad "retired script still vendored: ${s}"
+  else
+    ok "retired script not vendored: ${s}"
   fi
 done
 

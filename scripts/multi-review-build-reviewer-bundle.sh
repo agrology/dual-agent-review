@@ -9,7 +9,19 @@ SKILL="${ROOT}/.agents/skills/multi-review"
 
 mkdir -p "${SKILL}/protocol" "${SKILL}/scripts"
 cp "${ROOT}/docs/multi-review.md" "${SKILL}/protocol/multi-review.md"
-for s in multi-review-core.sh multi-review-peer.sh multi-review-wait.sh multi-review-watch.sh; do
+
+BUNDLED_SCRIPTS="multi-review-core.sh"
+for s in ${BUNDLED_SCRIPTS}; do
   cp "${ROOT}/scripts/${s}" "${SKILL}/scripts/${s}"
+done
+# drop any previously-vendored script no longer in the bundled set (e.g. a retired mode's
+# helper) so the skill dir never carries stale, unreferenced copies.
+for f in "${SKILL}"/scripts/*; do
+  [[ -e "$f" ]] || continue
+  b="$(basename "$f")"
+  case " ${BUNDLED_SCRIPTS} " in
+    *" ${b} "*) ;;
+    *) rm -f "$f" ;;
+  esac
 done
 echo "reviewer bundle regenerated under ${SKILL}"

@@ -1,110 +1,91 @@
 ---
 name: multi-review
 description: >-
-  Review a multi-review review document as the Codex/GPT reviewer. Use when asked
-  to review a doc under the file-coordination multi-review protocol, especially
-  docs with a `<!-- multi-review: ... -->` marker or requests like
-  "multi-review <doc>".
+  Review a multi-review star review working copy as the Codex/GPT secondary. Use when asked
+  to review a doc under the file-coordination multi-review protocol, especially docs with a
+  `<!-- multi-review: ... -->` marker or requests like "multi-review <doc>".
 ---
 
 # Multi Review
 
 ## Purpose
 
-Act as the reviewer in this repo's multi-review review protocol. The author side is Claude's `/multi-review`; the Codex/GPT side is this `/multi-review` skill.
+Act as a **secondary** in this repo's multi-review star review: one primary (Claude) plus N
+independent secondaries, each reviewing its own isolated copy of a doc. The primary is
+Claude's `/multi-review`; this skill is the Codex/GPT secondary's side. There is one review
+model — star — no mode detection, no back-and-forth with other secondaries.
 
 ## Workflow
 
 > Setup assumption: this skill lives at `.agents/skills/multi-review/` in the repo Codex is
-> running in; all helper/protocol paths below are relative to the repo root.
+> running in; all bundled protocol/script paths below are relative to the repo root.
 
-1. Read the bundled protocol contract: `.agents/skills/multi-review/protocol/multi-review.md`.
-2. Resolve the target to ONE canonical absolute path before reviewing anything. Worktrees
-   mean a repo can hold several same-named copies of the doc; reviewing the wrong one
-   deadlocks both agents silently.
-   - Canonicalize the path you were given (resolve relative segments and symlinks) and
-     use the result everywhere below. Prefer being handed an absolute path by the author.
-   - If that path is missing, or exists but carries no marker, the live copy may be in
-     another checkout: run `git worktree list` and inspect each checkout for the same
-     repo-relative doc.
-   - A copy is a CANDIDATE only if its marker is in a non-terminal state
-     (`awaiting-reviewer` or `awaiting-author`); `converged`/`exhausted` copies never are.
-   - Proceed only when EXACTLY ONE candidate exists. Zero candidates: stop and report the
-     doc is not armed. Two or more: stop and ask the user which copy is live. Never guess.
-3. Read only the target document unless the user explicitly authorizes broader repo context.
-4. Find the marker line:
-   `<!-- multi-review: <state> · round <n>/<max> -->`
-5. Act only when the state is `awaiting-reviewer`.
-   - If it is `awaiting-author`, it is the author's turn — wait for the hand-back (see
-     "Waiting for your turn"), then review.
-   - If it is `converged` or `exhausted`, stop at the human gate. (In peer-review mode this is
-     all you do — only the author side can post to the PR; you never call `gh`.)
-   - If the marker is missing or malformed, stop and report that the doc is not armed.
+1. Read the bundled protocol contract in full: `.agents/skills/multi-review/protocol/multi-review.md`.
+   It defines the star grammar this workflow uses; nothing below restates it.
+2. Resolve the target to ONE canonical absolute path before reviewing anything. You were most
+   likely handed that path directly (the dispatch prompt names your exact working copy). If
+   instead you were handed the bare doc path with no copy suffix:
+   - Look for `<path>.codex` next to it — that is your working copy.
+   - If neither the given path nor `<path>.codex` exists, or exists but carries no marker, the
+     live copy may be in another checkout: run `git worktree list` and check each checkout for
+     the same repo-relative doc.
+   - Proceed only when EXACTLY ONE candidate copy exists with a non-terminal marker
+     (`awaiting-reviewer`). Zero candidates: stop and report the doc is not armed for you. Two
+     or more: stop and ask which copy is live. Never guess.
+3. Read only that working copy unless the user explicitly authorizes broader repo context.
+   Star review is **not** diff-scoped — review the whole document body on its merits, end to
+   end (see "Scope" in the protocol doc for the narrow PR-diff exception).
+4. Check the copy's marker:
+   `bash .agents/skills/multi-review/scripts/multi-review-core.sh marker "<copy>"`
+   — prints `<state> <round> <max>`.
+   - Act only when the state is `awaiting-reviewer`.
+   - `awaiting-author` means you already took your turn on this copy — nothing more to do.
+   - `converged` or `exhausted` means the review is over — stop at the human gate.
+   - Missing or malformed marker: stop and report the doc is not armed.
+5. Review the document for unresolved design, safety, correctness, implementation-plan, or
+   protocol concerns. Prefer a small number of high-signal findings over exhaustive commentary.
+6. For each concern, append to the `## Review` section, using a fresh id scoped to this copy
+   (`r1`, `r2`, … — you never coordinate ids with anyone else; the primary namespaces them on
+   merge):
 
-**First, determine the review mode:** run `.agents/skills/multi-review/scripts/multi-review-peer.sh mode "<doc>"`.
+       > [finding:<id>|<sev>] <concern>
+       > — via <your-model-id>
+       > — risk: <short risk>
 
-- **`asymmetric`** (local spec/plan doc) — the existing workflow: leave `> [reviewer:<id>]`
-  concerns (+ `> — via <model>`), and set `converged` when no `[reviewer:]` lacks its
-  `[author: resolved:]`. (Steps below.)
+   `<sev>` is `high`, `med`, or `low`. Keep the concern to one short line and the risk to one
+   clause. Optionally, immediately after the risk line, anchor the finding to a changed line
+   (only meaningful when the doc is a PR diff scratch — omit otherwise):
 
-- **`peer-review`** (PR-mode doc, header `<!-- multi-review-mode: peer-review -->`) — you are a
-  **peer reviewer**, not a one-sided commenter. On your turn:
-  1. `.agents/skills/multi-review/scripts/multi-review-peer.sh open-findings "<doc>"` — the other agent's findings awaiting
-     your response (a hard error means a malformed doc — stop and surface, don't guess).
-  2. For each, append in the `## Review` section `> [concur:<id>]` or `> [dispute:<id>] <why>`,
-     each followed by `> — via <your-model-id>`.
-  3. Add your own new findings: `> [finding:<new-id>|<sev>] <concern>` + `> — via <your-model-id>`
-     + `> — risk: <short risk>` (unique ids; `<sev>` ∈ high/med/low; one terse line + one risk clause).
-  4. Optionally `> [withdraw:<id>]` + `> — via <your-model-id>` for findings YOU raised.
-  5. **Convergence:** set the marker to `converged` only when
-     `.agents/skills/multi-review/scripts/multi-review-peer.sh check-converged "<doc>"` passes (every finding settled, none
-     open; dissent is fine). Otherwise flip to `awaiting-author` to hand back.
-  6. **Never** use `[reviewer:]` or `[author: resolved:]` in a peer-review doc; identity is the
-     `> — via <model-id>` line, and you may not respond to your own finding.
+       > — at <path>:<line>
 
-6. Review the document for unresolved design, safety, correctness, implementation-plan, or protocol concerns.
-7. For each concern, append a top-level blockquote line using a unique id. Ids must match `[A-Za-z0-9_-]+`:
-   `> [reviewer:<id>] <concern>`
-8. Immediately after each reviewer line, add the required disclosure line:
-   `> — via <your-model-id>`
-9. Reuse no ids already present in `[reviewer:<id>]` or `[author: resolved:<id>]`.
-10. Flip the marker last:
-    - If any concern is open, including pre-existing unresolved concerns, change `awaiting-reviewer` to `awaiting-author`.
-    - If no reviewer concerns are open, change it to `converged`.
-11. Do not proceed to implementation, commits, or PR work.
+   using RIGHT-side new-file line numbers.
+7. You raise findings only. Do not respond to a finding (yours or anyone else's — that verb set
+   is `[agree:]`/`[dispute:]`, and it belongs to the primary), and do not decide convergence.
+8. Flip the marker **last**, as your FINAL edit of this turn: change this copy's
+   `awaiting-reviewer` to `awaiting-author` (the flip is the handoff). Never set any other
+   state, and never edit the primary's doc or any other provider's copy.
+9. Stop. Do not implement, commit, or open a PR — stop at the human gate. Do one turn per
+   invocation; you are not re-invoked within this session for a later round — a fresh round
+   dispatches a fresh copy.
 
 ## Review Standard
 
-Prefer a small number of high-signal concerns over exhaustive commentary. A good concern is actionable, tied to the doc's stated goal, and explains the failure mode or ambiguity the author should resolve.
+A good finding is actionable, tied to the doc's stated goal, and explains the failure mode or
+ambiguity the primary should resolve.
 
-Use ids like `r1`, `r2`, or `missing-timeout` when the doc already has numbered ids. Preserve existing author and reviewer comments.
+Use ids like `r1`, `r2`, or `missing-timeout`. Do not reuse an id already present in this copy.
 
-## Waiting for your turn (default — do this unless the user says otherwise)
+## Scope discipline
 
-Nothing wakes this session when the author hands the doc back, so after flipping to
-`awaiting-author` (and whenever you find the doc in that state), wait for your turn:
-
-    bash .agents/skills/multi-review/scripts/multi-review-wait.sh "<doc>" awaiting-reviewer
-
-Branch on its exit code:
-
-- **0** — your turn again: re-read the doc and review (step 6 onward).
-- **9** — bound hit, nothing happened yet: run the same command again. Chain as many
-  waits as your harness allows; tell the user to re-invoke `/multi-review <doc>` only if
-  you cannot keep waiting.
-- **10** — the review reached `converged`/`exhausted`: stop at the human gate.
-
-The wait script is lock-free and read-only, so it cannot disturb the author's watcher.
-NEVER run `.agents/skills/multi-review/scripts/multi-review-watch.sh` yourself — its lock takeover would kill the
-author's watcher.
+Read only the document you were pointed at (plus, for a PR-diff scratch, the current bodies of
+repo files the diff directly references, solely to check the change is self-consistent — see
+"Scope" in the protocol doc). Capture no env/secrets, and upload nothing beyond the doc's
+content without explicit authorization.
 
 ## Output
 
-After each round, summarize:
+After your turn, report:
 
-- Whether concerns were added or the doc converged.
-- The ids added.
-- That the marker was flipped as the final edit.
-- That you are now waiting for the author (or, if you cannot keep waiting, that the user
-  should re-invoke `/multi-review <doc>` for the next round). Skip when converged or
-  exhausted.
+- Whether findings were added, and their ids.
+- That the marker was flipped to `awaiting-author` as the final edit.
+- That you are done — the primary picks the review back up; you do not wait for it.
