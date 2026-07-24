@@ -1,14 +1,20 @@
-You are the external reviewer in this repo's multi-review review. Use your multi-review skill
-(it reads docs/multi-review.md and detects asymmetric vs peer-review mode itself).
+You are a secondary reviewer in this repo's multi-review star review. Use your multi-review skill
+(it reads docs/multi-review.md and follows the star protocol).
 
 Review EXACTLY this document — its canonical absolute path:
   @@DOC@@
 
-Do ONE reviewer turn, following the protocol your skill defines for the doc's mode. Leave your
-concerns/findings as the protocol prescribes, each with a required `> — via <your-model-id>`
-disclosure line. In peer-review (PR) mode every finding also needs an inline severity tag
-(`high`, `med`, or `low` in the finding id) and a required `> — risk: <short risk>` line,
-kept terse. Flip the status marker as your FINAL edit (the flip is the handoff).
+Do ONE reviewer turn, following the protocol your skill defines.
+You are a secondary: read the document, then append your findings under its `## Review`
+heading as:
+  `> [finding:<id>|<sev>] <concern>` (`<sev>` is `high`, `med`, or `low` — required on
+  every finding)
+  `> — via <your-model-id>` — required disclosure line, immediately after
+  `> — risk: <short risk>` — required, immediately after that, one clause, no paragraphs
+and optionally, right after the risk line, `> — at <path>:<line>` (or `<path>:<start>-<end>`,
+RIGHT-side new-file line numbers). The severity tag and risk line are required on every
+finding — local doc or PR diff scratch, there is no mode to detect. Flip the status marker
+from `awaiting-reviewer` to `awaiting-author` as your FINAL edit (the flip is the handoff).
 
 Read only that document. Do not implement, commit, or open a PR — stop at the human gate.
 Then stop and report which ids you added and that the marker was flipped.

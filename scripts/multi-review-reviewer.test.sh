@@ -159,14 +159,12 @@ done
 out="$(bash "$SUT" prompt "$D" --reviewer codex 2>/dev/null)"
 grep -qi 'multi-review skill' <<<"$out" && ok "codex prompt references its skill" || bad "codex skill reference missing"
 
-# --- prompt: skill-less providers get an ACTIONABLE read-then-detect instruction, ---
+# --- prompt: skill-less providers get an ACTIONABLE read-then-act instruction, ---
 # --- not merely a path (a bare path would satisfy a substring check and be useless) ---
 for p in fable gemini; do
   out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
   grep -qiE 'read the protocol contract in full' <<<"$out" \
     && ok "prompt($p) instructs reading the protocol" || bad "prompt($p) lacks the read instruction"
-  grep -qiE 'determine which mode' <<<"$out" \
-    && ok "prompt($p) instructs mode detection" || bad "prompt($p) lacks the mode-detect instruction"
   grep -qF 'protocol/multi-review.md' <<<"$out" \
     && ok "prompt($p) names the protocol file" || bad "prompt($p) lacks the protocol path"
   # No reference to a skill ANYWHERE in a skill-less prompt — not just the exact phrase
@@ -183,11 +181,36 @@ for p in fable gemini; do
     || bad "prompt($p) does not name the protocol contract as the mode authority"
 done
 
-# --- prompt: never hardcodes mode-specific grammar (mode detection stays single-sourced) ---
+# --- prompt: never hardcodes the RETIRED asymmetric/peer-review grammar (superseded by star) ---
 for p in codex fable gemini; do
   out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
   ! grep -qF '[reviewer:' <<<"$out" && ! grep -qF '[concur:' <<<"$out" \
-    && ok "prompt($p) does not hardcode mode grammar" || bad "prompt($p) hardcodes mode grammar"
+    && ok "prompt($p) does not hardcode retired mode grammar" || bad "prompt($p) hardcodes retired mode grammar"
+done
+
+# --- prompt: star is the ONE review model — no mode to detect, no asymmetric/peer-review wording ---
+for p in codex fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  ! grep -qiE 'asymmetric|peer-review|determine which mode' <<<"$out" \
+    && ok "prompt($p) has no asymmetric/peer-review/mode-detection wording" \
+    || bad "prompt($p) still references a retired review mode: $(grep -oiE 'asymmetric|peer-review|determine which mode' <<<"$out")"
+done
+
+# --- prompt: the star finding grammar is stated unconditionally — severity + risk required on ---
+# --- EVERY finding, no local-doc-vs-PR distinction (this is the fix for the whole-branch-review ---
+# --- finding: the old prompt gated the sev/risk requirement on "peer-review (PR) mode", which ---
+# --- contradicts multi-review-star.sh's _table, which hard-fails ANY finding missing either) ---
+for p in codex fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  grep -qF '[finding:<id>|<sev>]' <<<"$out" \
+    && ok "prompt($p) states the star finding grammar" || bad "prompt($p) missing the star finding grammar"
+  grep -qF '`> — risk:' <<<"$out" \
+    && ok "prompt($p) requires the risk line" || bad "prompt($p) missing the required risk line"
+  grep -qi 'required on' <<<"$out" && grep -qi 'every finding' <<<"$out" \
+    && ok "prompt($p) requires severity unconditionally on every finding" \
+    || bad "prompt($p) does not require severity on every finding"
+  grep -qiE 'no mode to.?detect' <<<"$out" \
+    && ok "prompt($p) states there is no mode to detect" || bad "prompt($p) doesn't say there is no mode to detect"
 done
 
 # --- prompt: usage errors and read-only guarantee ---

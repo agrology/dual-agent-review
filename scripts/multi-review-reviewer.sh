@@ -114,30 +114,31 @@ abs_path() { # <path> -> canonical absolute path, or die 2
 }
 
 # The opening paragraph is the ONLY provider-dependent part of the prompt. Skill-bearing
-# reviewers are pointed at their skill; skill-less ones get an actionable read-then-detect
-# instruction, because a bare path leaves them nothing to act on. Mode detection itself stays
-# single-sourced in the protocol file and is never restated here.
+# reviewers are pointed at their skill; skill-less ones get an actionable read-then-act
+# instruction, because a bare path leaves them nothing to act on. There is one review model
+# (star) and one finding grammar — it is stated unconditionally in emit_prompt below, never
+# gated on a mode the reviewer has to detect.
 prompt_head() { # <has-skill>
   if [[ "$1" == "yes" ]]; then
     cat <<'HEAD'
-You are the external reviewer in this repo's multi-review review. Use your multi-review skill
-(it reads docs/multi-review.md and detects asymmetric vs peer-review mode itself).
+You are a secondary reviewer in this repo's multi-review star review. Use your multi-review skill
+(it reads docs/multi-review.md and follows the star protocol).
 HEAD
   else
     cat <<HEAD
-You are the external reviewer in this repo's multi-review review.
+You are a secondary reviewer in this repo's multi-review star review.
 
 Before editing anything, read the protocol contract in full:
   ${PROTOCOL}
-It defines the review modes. Determine which mode this document is in by reading its
-header marker, and follow that mode's grammar for the rest of this turn.
+It defines the star finding grammar and the copy-marker handoff. Follow it for the rest of
+this turn.
 HEAD
   fi
 }
 
 emit_prompt() { # <abs-doc-path> <has-skill>
   local abs="$1" has_skill="$2" authority
-  # Who defines the mode grammar for this reviewer. Saying "your skill" to a skill-less
+  # Who defines the finding grammar for this reviewer. Saying "your skill" to a skill-less
   # reviewer contradicts the head block, which just told it to read the protocol file.
   # The codex wording is byte-frozen; only the skill-less variant differs.
   if [[ "$has_skill" == "yes" ]]; then
@@ -151,11 +152,17 @@ emit_prompt() { # <abs-doc-path> <has-skill>
 Review EXACTLY this document — its canonical absolute path:
   ${abs}
 
-Do ONE reviewer turn, following ${authority} for the doc's mode. Leave your
-concerns/findings as the protocol prescribes, each with a required \`> — via <your-model-id>\`
-disclosure line. In peer-review (PR) mode every finding also needs an inline severity tag
-(\`high\`, \`med\`, or \`low\` in the finding id) and a required \`> — risk: <short risk>\` line,
-kept terse. Flip the status marker as your FINAL edit (the flip is the handoff).
+Do ONE reviewer turn, following ${authority}.
+You are a secondary: read the document, then append your findings under its \`## Review\`
+heading as:
+  \`> [finding:<id>|<sev>] <concern>\` (\`<sev>\` is \`high\`, \`med\`, or \`low\` — required on
+  every finding)
+  \`> — via <your-model-id>\` — required disclosure line, immediately after
+  \`> — risk: <short risk>\` — required, immediately after that, one clause, no paragraphs
+and optionally, right after the risk line, \`> — at <path>:<line>\` (or \`<path>:<start>-<end>\`,
+RIGHT-side new-file line numbers). The severity tag and risk line are required on every
+finding — local doc or PR diff scratch, there is no mode to detect. Flip the status marker
+from \`awaiting-reviewer\` to \`awaiting-author\` as your FINAL edit (the flip is the handoff).
 
 Read only that document. Do not implement, commit, or open a PR — stop at the human gate.
 Then stop and report which ids you added and that the marker was flipped.
@@ -262,8 +269,9 @@ assert_balanced_fences() { # <file> — hard error (exit 1) on an unterminated c
     || die "unterminated code fence in ${file} opened at line ${ln}: protocol lines after it are invisible — refusing to verify" 1
 }
 
-# Top-level protocol-comment lines of ANY grammar (asymmetric or peer-review), reduced to each
-# line's IDENTITY KEY (role:id) — used only to detect "the turn added comments but contributed
+# Top-level protocol-comment lines of ANY grammar this parser still recognizes (star's current
+# finding grammar plus the two single-reviewer/two-agent grammars it superseded), reduced to
+# each line's IDENTITY KEY (role:id) — used only to detect "the turn added comments but contributed
 # no usable disclosure" below. A key-based diff, not a full-line diff: rewording an existing
 # finding's prose (or adding a stray trailing space) must not read as a newly added comment,
 # only a genuinely new role:id pair should. `finding:f1|high` reduces to `finding:f1` — the id
