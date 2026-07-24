@@ -407,8 +407,8 @@ D="$(mkstar obs.md \
 # the observation is NOT a finding: the sole finding is agreed, so there is no open finding
 [[ -z "$(bash "$SUT" open-findings "$D" 2>/dev/null)" ]] && ok "observations: not counted as a finding" || bad "observation leaked as finding"
 # observations lists it
-out="$(bash "$SUT" observations "$D" 2>/dev/null)"
-[[ "$out" == "secondaries all missed the retry cap" ]] && ok "observations: listed" || bad "observations list (got '$out')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ "$out" == "secondaries all missed the retry cap" && $rc -eq 0 ]] && ok "observations: listed" || bad "observations list (got '$out' rc=$rc)"
 # gate-summary shows it under the observations heading
 # (capture first, then grep the captured string — piping bash "$SUT" ... | grep -q directly
 # races under `set -o pipefail`: grep -q exits the instant it matches this early-ish line,
@@ -416,8 +416,9 @@ out="$(bash "$SUT" observations "$D" 2>/dev/null)"
 # writer dies with SIGPIPE (141) and pipefail promotes that over grep's 0 — same class of
 # bug as `yes | head -1` under pipefail. Same capture-then-grep idiom used everywhere else
 # in this file.)
-out="$(bash "$SUT" gate-summary "$D" claude-opus-4-8 2>/dev/null)"
-printf '%s' "$out" | grep -q "Primary observations (human-gate only)" && ok "observations: in gate-summary" || bad "observations gate-summary"
+out="$(bash "$SUT" gate-summary "$D" claude-opus-4-8 2>/dev/null)"; rc=$?
+printf '%s' "$out" | grep -q "Primary observations (human-gate only)" && [[ $rc -eq 0 ]] \
+  && ok "observations: in gate-summary" || bad "observations gate-summary (rc=$rc)"
 
 # an observation added to an otherwise-converged doc must not affect check-converged
 D="$(mkconv conv-with-obs.md)"
@@ -426,8 +427,53 @@ bash "$SUT" check-converged "$D" >/dev/null 2>&1 && ok "check-converged: observa
 [[ -z "$(bash "$SUT" open-findings "$D" 2>/dev/null)" ]] && ok "observations: open-findings still empty alongside observation" || bad "observations: leaked into open-findings"
 
 # a doc with NO observations -> gate-summary output byte-identical to before (dormant/additive)
-out_noobs="$(bash "$SUT" gate-summary "$G" claude-opus-4-8 2>/dev/null)"
+out_noobs="$(bash "$SUT" gate-summary "$G" claude-opus-4-8 2>/dev/null)"; rc=$?
 printf '%s' "$out_noobs" | grep -q "Primary observations" && bad "observations heading leaked with no observations" || ok "observations: heading absent when no observations (dormant)"
+[[ $rc -eq 0 ]] && ok "gate-summary: exits 0 on a normal doc with no observations" || bad "gate-summary rc on no-observations doc ($rc)"
+
+## --- observations: fail loud on missing disclosure (Codex peer-review finding #1) ---
+# A "> [observation]" line NOT immediately followed by a "> — via " line must fail loud
+# (stderr message + non-zero exit), mirroring _table's fail() for findings — it must not
+# silently vanish (rc=0, no output, no error), which is what cmd_observations used to do.
+
+# mid-doc: the observation is followed by SOME other line that is not a via line.
+D="$(mkstar obs-badmid.md \
+  '> [observation] a note missing its disclosure line' \
+  '> not a via line at all')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && ok "observations: mid-doc missing via fails loud (no output)" \
+  || bad "observations mid-doc missing via (rc=$rc out='$out')"
+err="$(bash "$SUT" observations "$D" 2>&1 >/dev/null)"
+printf '%s' "$err" | grep -qi 'not followed by' && ok "observations: mid-doc stderr is fail-loud" \
+  || bad "observations mid-doc stderr (got '$err')"
+
+# end-of-doc: the observation is the LAST line of ## Review — no via line follows at all.
+D="$(mkstar obs-badend.md \
+  '> [observation] a trailing note with no disclosure line')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && ok "observations: end-of-doc missing via fails loud (no output)" \
+  || bad "observations end-of-doc missing via (rc=$rc out='$out')"
+err="$(bash "$SUT" observations "$D" 2>&1 >/dev/null)"
+printf '%s' "$err" | grep -qi 'not followed by' && ok "observations: end-of-doc stderr is fail-loud" \
+  || bad "observations end-of-doc stderr (got '$err')"
+
+# a well-formed observation is unaffected by the fail-loud change (belt-and-suspenders re-check)
+D="$(mkstar obs-good2.md \
+  '> [observation] a properly disclosed note' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ "$out" == "a properly disclosed note" && $rc -eq 0 ]] \
+  && ok "observations: well-formed still passes after fail-loud fix" \
+  || bad "observations well-formed regressed (out='$out' rc=$rc)"
+
+# gate-summary must not silently swallow a malformed observation either — the whole point of
+# the fix is that it must not silently vanish from the gate summary, so gate-summary fails
+# loud too rather than quietly proceeding without it.
+D="$(mkstar obsgate-bad.md \
+  '> [observation] gate summary should not swallow this' \
+  '> not a via line')"
+bash "$SUT" gate-summary "$D" claude-opus-4-8 >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "gate-summary: malformed observation fails loud (not silently dropped)" \
+  || bad "gate-summary malformed observation swallowed"
 
 ## --- compose-review / compose-inline (Task A4, dormant PR-publish composers) ---
 # one agreed ANCHORED finding + one agreed UN-anchored finding

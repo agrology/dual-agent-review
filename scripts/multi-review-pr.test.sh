@@ -382,6 +382,18 @@ PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRPEER" 'Claude Opus 4.8 (claude-opu
 grep -qF 'Agreed findings' "${WORK}/posted-body.txt" && ok "publish: peer mode posts the joint review" || bad "publish peer body (got: $(cat "${WORK}/posted-body.txt"))"
 grep -qF 'Addressed (' "${WORK}/posted-body.txt" && bad "publish used the asymmetric compose in peer mode" || ok "publish: not the asymmetric compose"
 
+# --- publish: the star pre-check (multi-review-star.sh mode, run BEFORE peer/asymmetric
+# dispatch — Task A5) adds no noise to an existing peer-mode publish. CRPEER is NOT a star
+# doc, so the star pre-check must defer silently; peer-mode publish's exit code and stderr
+# must be exactly what they were before the pre-check existed (Codex peer-review finding #2).
+: > "$CALLLOG"
+err="$(PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRPEER" 'Claude Opus 4.8 (claude-opus-4-8)' 2>&1 >/dev/null)"
+code=$?
+[[ $code -eq 0 ]] && ok "publish: peer-mode succeeds with star pre-check in place" \
+  || bad "publish peer-mode code with star pre-check ($code)"
+[[ -z "$err" ]] && ok "publish: star pre-check adds no stderr noise to peer-mode publish" \
+  || bad "publish peer-mode stderr noise (got '$err')"
+
 # --- publish: a gh failure is surfaced ---
 cat > "${PSTUB}/gh" <<'STUBEOF'
 #!/usr/bin/env bash
