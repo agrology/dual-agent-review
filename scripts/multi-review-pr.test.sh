@@ -382,6 +382,18 @@ PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRPEER" 'Claude Opus 4.8 (claude-opu
 grep -qF 'Agreed findings' "${WORK}/posted-body.txt" && ok "publish: peer mode posts the joint review" || bad "publish peer body (got: $(cat "${WORK}/posted-body.txt"))"
 grep -qF 'Addressed (' "${WORK}/posted-body.txt" && bad "publish used the asymmetric compose in peer mode" || ok "publish: not the asymmetric compose"
 
+# --- publish: the star pre-check (multi-review-star.sh mode, run BEFORE peer/asymmetric
+# dispatch — Task A5) adds no noise to an existing peer-mode publish. CRPEER is NOT a star
+# doc, so the star pre-check must defer silently; peer-mode publish's exit code and stderr
+# must be exactly what they were before the pre-check existed (Codex peer-review finding #2).
+: > "$CALLLOG"
+err="$(PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRPEER" 'Claude Opus 4.8 (claude-opus-4-8)' 2>&1 >/dev/null)"
+code=$?
+[[ $code -eq 0 ]] && ok "publish: peer-mode succeeds with star pre-check in place" \
+  || bad "publish peer-mode code with star pre-check ($code)"
+[[ -z "$err" ]] && ok "publish: star pre-check adds no stderr noise to peer-mode publish" \
+  || bad "publish peer-mode stderr noise (got '$err')"
+
 # --- publish: a gh failure is surfaced ---
 cat > "${PSTUB}/gh" <<'STUBEOF'
 #!/usr/bin/env bash
@@ -608,6 +620,47 @@ EOF
 PATH="${ASTUB}:$PATH" bash "$SUT" publish "$AMAL" 'claude-opus-4-8' >/dev/null 2>&1 \
   && bad "publish should FAIL on a malformed-anchor contract violation, not post" \
   || ok "publish-malformed: contract violation fails the post (no silent degrade)"
+
+# --- publish: star mode dispatches through the star composer + cmd_publish_peer's posting
+# path (dormant, Task A5). No production code writes a star-mode scratch doc yet — this only
+# proves the dispatch wiring works when one exists. ---
+STARSCRATCH="${WORK}/star-scratch.md"
+cat > "$STARSCRATCH" <<'EOF'
+# PR review: Star
+
+<!-- multi-review-mode: star -->
+- **PR:** https://github.com/o/r/pull/8
+
+## Diff
+
+```
+diff --git a/foo.sh b/foo.sh
+--- a/foo.sh
++++ b/foo.sh
+@@ -1,1 +1,2 @@
+ context one
++added two
+```
+
+## Review
+
+> [finding:codex-rd1-a|high] anchored star concern
+> — via gpt-5.5
+> — risk: some risk
+> — at foo.sh:2
+> [agree:codex-rd1-a]
+> — via claude-opus-4-8
+EOF
+: > "$ACALLS"; rm -f "${WORK}/api-payload.json" "${WORK}/posted-body.txt"
+PATH="${ASTUB}:$PATH" bash "$SUT" publish "$STARSCRATCH" 'claude-opus-4-8' >/dev/null 2>&1
+code=$?
+[[ $code == 0 ]] && ok "publish-star: succeeds" || bad "publish-star code $code"
+[[ "$(wc -l < "$ACALLS")" -eq 1 ]] && ok "publish-star: exactly one gh call" || bad "publish-star made $(wc -l < "$ACALLS") gh calls"
+grep -q 'api .*repos/o/r/pulls/8/reviews' "$ACALLS" && ok "publish-star: posts via gh api reviews (inline path)" || bad "publish-star gh api call (got: $(cat "$ACALLS"))"
+jq -e '.comments | length == 1' "${WORK}/api-payload.json" >/dev/null && ok "publish-star: one inline comment" || bad "publish-star comment count"
+jq -e '.comments[0].path == "foo.sh" and .comments[0].line == 2' "${WORK}/api-payload.json" >/dev/null && ok "publish-star: inline anchored to foo.sh:2" || bad "publish-star inline fields"
+jq -e '.body | contains("multi-review star review")' "${WORK}/api-payload.json" >/dev/null && ok "publish-star: body carries the star composer's disclosure" || bad "publish-star body missing star disclosure (got: $(cat "${WORK}/api-payload.json"))"
+jq -e '.body | contains("Addressed (")' "${WORK}/api-payload.json" >/dev/null && bad "publish-star used the asymmetric compose" || ok "publish-star: not the asymmetric compose"
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi

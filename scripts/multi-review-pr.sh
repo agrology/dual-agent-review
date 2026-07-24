@@ -70,6 +70,18 @@ cmd_publish() { # <scratch> <model> -> post ONE neutral review via gh
   [[ -n "$url" ]] || die "no PR url in scratch header ('- **PR:** ...'): $scratch" 1
   tmp="$(mktemp)" || die "mktemp failed" 1
   local mode dir; dir="$(cd "$(dirname "$0")" && pwd)"
+  # Star has its own mode-hint grammar (multi-review-star.sh) and must be checked BEFORE
+  # multi-review-peer.sh's mode switch: peer's mode() recognizes ANY "multi-review-mode: ..."
+  # header and die()s on a value it doesn't know (e.g. "star"). No production code writes a
+  # star-mode PR scratch doc yet (dormant) — this only fires once one exists.
+  if "${dir}/multi-review-star.sh" mode "$scratch" > /dev/null; then
+    if ! "${dir}/multi-review-star.sh" compose-review "$scratch" "$model" > "$tmp"; then
+      rm -f "$tmp"; die "failed to compose star review body" 1
+    fi
+    cmd_publish_peer "$scratch" "$url" "$tmp" "$dir" "multi-review-star.sh"
+    rm -f "$tmp"
+    return 0
+  fi
   mode="$("${dir}/multi-review-peer.sh" mode "$scratch")" || die "cannot determine review mode for $scratch" 1
   if [[ "$mode" == "peer-review" ]]; then
     if ! "${dir}/multi-review-peer.sh" compose-review "$scratch" > "$tmp"; then
@@ -89,8 +101,9 @@ cmd_publish() { # <scratch> <model> -> post ONE neutral review via gh
   fi
 }
 
-cmd_publish_peer() { # <scratch> <url> <summary-file> <script-dir> — post summary + inline comments
+cmd_publish_peer() { # <scratch> <url> <summary-file> <script-dir> [inline-script] — post summary + inline comments
   local scratch="${1:?scratch}" url="${2:?url}" summaryf="${3:?summary}" dir="${4:?dir}"
+  local inline_script="${5:-multi-review-peer.sh}"
   local host o r n
   if [[ "$url" =~ ^https?://([^/]+)/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
     host="${BASH_REMATCH[1]}"; o="${BASH_REMATCH[2]}"; r="${BASH_REMATCH[3]}"; n="${BASH_REMATCH[4]}"
@@ -107,7 +120,7 @@ cmd_publish_peer() { # <scratch> <url> <summary-file> <script-dir> — post summ
   # earlier gate. A malformed doc MUST fail the post, never degrade.
   local carr inline_n=0 degraded="" degraded_n=0 path start end body concern_only inline_records rec
   carr="$(mktemp)" || die "mktemp failed" 1
-  if ! inline_records="$("${dir}/multi-review-peer.sh" compose-inline "$scratch")"; then
+  if ! inline_records="$("${dir}/${inline_script}" compose-inline "$scratch")"; then
     rm -f "$carr"; die "failed to compose inline records for $scratch (contract violation)" 1
   fi
   # compose-inline emits "path\tstart\tend\tbody" (TSV, 4 fields; end may be empty).

@@ -11,6 +11,12 @@ bad() { echo "  FAIL: $1"; fails=$((fails+1)); }
 # mkdoc <name> <header-extra-lines...> -> path with H1 + extras + a ## Review section
 mkdoc() { local p="${WORK}/$1"; shift; { echo "# Doc"; printf '%s\n' "$@"; echo; echo "## Review"; echo; } > "$p"; echo "$p"; }
 
+# mkstar <name> <review-line...> : a star doc; each arg is emitted verbatim into ## Review.
+# Callers pass finished "> [finding:<provider>-rd1-<id>|<sev>] ..." + "> — via ..." + "> — risk: ..."
+# + "> [agree:<same-ns-id>]" + "> — via <primary>" blocks. The ns-id prefix (<provider>) is what
+# gate-summary reads to learn which secondaries were admitted — no manifest required.
+mkstar() { local p="${WORK}/$1"; shift; { echo "# Doc"; echo "<!-- multi-review-mode: star -->"; echo; echo "## Review"; echo; printf '%s\n' "$@"; } > "$p"; echo "$p"; }
+
 # --- mode ---
 # star hint (bare) -> star
 D="$(mkdoc star1.md '<!-- multi-review-mode: star -->')"
@@ -53,6 +59,26 @@ out="$(bash "$SUT" resolve-set --reviewers gemini 2>/dev/null)"
 # --reviewers with no value -> usage exit 2, not the empty-set exit 3
 bash "$SUT" resolve-set --reviewers >/dev/null 2>&1; rc=$?
 [[ $rc -eq 2 ]] && ok "resolve-set: --reviewers with no value -> usage exit 2" || bad "resolve-set no-value exit (got $rc)"
+
+# --- resolve-set --fable-floor (Phase 2, dormant) ---
+# named set gains fable, appended last, deduped
+out="$(bash "$SUT" resolve-set --fable-floor --reviewers codex,gemini 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+[[ "$out" == "codex gemini fable " ]] && ok "fable-floor: appends fable last" || bad "fable-floor named (got '$out')"
+
+# explicit fable is not duplicated
+out="$(bash "$SUT" resolve-set --fable-floor --reviewers codex,fable 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+[[ "$out" == "codex fable " ]] && ok "fable-floor: no dup when named" || bad "fable-floor dup (got '$out')"
+
+# empty named set -> {fable}, and NOT exit 3
+out="$(bash "$SUT" resolve-set --fable-floor 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"; rc=$?
+[[ "$out" == "fable " && $rc -eq 0 ]] && ok "fable-floor: empty -> {fable}, exit 0" || bad "fable-floor empty (got '$out' rc=$rc)"
+
+# WITHOUT the flag, empty still exits 3 (legacy detection unbroken)
+bash "$SUT" resolve-set >/dev/null 2>&1; [[ $? -eq 3 ]] && ok "resolve-set: no flag, empty still exit 3" || bad "legacy exit3 broke"
+
+# WITHOUT the flag, NAMED resolution byte-unchanged (r3: the shared fn was edited — prove no perturbation)
+out="$(bash "$SUT" resolve-set --reviewers codex,gemini,codex 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')"
+[[ "$out" == "codex gemini " ]] && ok "resolve-set: no-flag named unchanged" || bad "no-flag named regressed (got '$out')"
 
 # --- available ---
 out="$(bash "$SUT" available 2>/dev/null)"
@@ -338,6 +364,230 @@ echo "$out" | grep -q 'nit naming' && echo "$out" | grep -q 'style pref' && ok "
 echo "$out" | grep -q 'fable' && ok "gate-summary: quarantine named" || bad "gate quarantine"
 # pure read — doc unchanged
 [[ "$before" == "$after" ]] && ok "gate-summary: does not mutate doc" || bad "gate mutated doc"
+
+# --- gate-summary --flag-independence (opt-in; without it, output is byte-identical) ---
+# CODEX_DOC: one agreed cross-vendor (codex) finding; primary is anthropic (claude-opus-4-8)
+CODEX_DOC="$(mkstar codexdoc.md \
+  '> [finding:codex-rd1-a|med] cross-vendor concern' '> — via gpt-5.5' '> — risk: some risk' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+# FABLE_ONLY_DOC: one agreed same-vendor (fable) finding; primary anthropic
+FABLE_ONLY_DOC="$(mkstar fabledoc.md \
+  '> [finding:fable-rd1-a|low] same-vendor concern' '> — via claude-fable-5' '> — risk: some risk' \
+  '> [agree:fable-rd1-a]' '> — via claude-opus-4-8')"
+
+# fable-only review, anthropic primary -> independence warning printed
+out="$(bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 --flag-independence 2>/dev/null)"
+printf '%s' "$out" | grep -q "no independent cross-vendor perspective" && ok "independence: fable-only warns" || bad "independence fable-only"
+
+# codex admitted -> no warning
+out="$(bash "$SUT" gate-summary "$CODEX_DOC" claude-opus-4-8 --flag-independence 2>/dev/null)"
+printf '%s' "$out" | grep -q "no independent cross-vendor perspective" && bad "independence codex should be silent" || ok "independence: codex silent"
+
+# without the flag -> no independence line at all
+a="$(bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 2>/dev/null)"
+printf '%s' "$a" | grep -q "cross-vendor" && bad "independence leaked without flag" || ok "independence: opt-in only"
+
+# FABLE_QUARANTINED_CODEX_DOC: only same-vendor (fable) admitted, but a cross-vendor (codex)
+# secondary was attempted and quarantined -> distinct "attempted but quarantined" message
+# naming codex, not the generic same-vendor-only warning.
+FABLE_QUARANTINED_CODEX_DOC="$(mkstar fabledoc-qcodex.md \
+  '> [finding:fable-rd1-a|low] same-vendor concern' '> — via claude-fable-5' '> — risk: some risk' \
+  '> [agree:fable-rd1-a]' '> — via claude-opus-4-8' \
+  '<!-- star-quarantined: codex · identity-fail · round 1 -->')"
+out="$(bash "$SUT" gate-summary "$FABLE_QUARANTINED_CODEX_DOC" claude-opus-4-8 --flag-independence 2>/dev/null)"
+printf '%s' "$out" | grep -q "attempted but quarantined" && printf '%s' "$out" | grep -q "codex" \
+  && ok "independence: attempted-but-quarantined names codex" || bad "independence attempted-but-quarantined"
+
+# unknown/typo'd trailing arg must FAIL LOUD, not silently disable the flag (g1, Codex PR#10 review)
+bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 --flag-independance >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "gate-summary: unknown arg fails loud" || bad "gate-summary swallowed unknown arg (typo'd flag)"
+
+## --- observations (Task A3) ---
+# a doc with one agreed finding + a primary observation
+D="$(mkstar obs.md \
+  '> [finding:codex-rd1-a|med] a concern' '> — via gpt-5.5' '> — risk: some risk' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8' \
+  '> [observation] secondaries all missed the retry cap' '> — via claude-opus-4-8')"
+# the observation is NOT a finding: the sole finding is agreed, so there is no open finding
+[[ -z "$(bash "$SUT" open-findings "$D" 2>/dev/null)" ]] && ok "observations: not counted as a finding" || bad "observation leaked as finding"
+# observations lists it
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ "$out" == "secondaries all missed the retry cap" && $rc -eq 0 ]] && ok "observations: listed" || bad "observations list (got '$out' rc=$rc)"
+# gate-summary shows it under the observations heading
+# (capture first, then grep the captured string — piping bash "$SUT" ... | grep -q directly
+# races under `set -o pipefail`: grep -q exits the instant it matches this early-ish line,
+# closing the pipe while the multi-process writer is still emitting later lines, so the
+# writer dies with SIGPIPE (141) and pipefail promotes that over grep's 0 — same class of
+# bug as `yes | head -1` under pipefail. Same capture-then-grep idiom used everywhere else
+# in this file.)
+out="$(bash "$SUT" gate-summary "$D" claude-opus-4-8 2>/dev/null)"; rc=$?
+printf '%s' "$out" | grep -q "Primary observations (human-gate only)" && [[ $rc -eq 0 ]] \
+  && ok "observations: in gate-summary" || bad "observations gate-summary (rc=$rc)"
+
+# an observation added to an otherwise-converged doc must not affect check-converged
+D="$(mkconv conv-with-obs.md)"
+{ echo '> [observation] a note for the human gate'; echo '> — via claude-opus-4-8'; } >> "$D"
+bash "$SUT" check-converged "$D" >/dev/null 2>&1 && ok "check-converged: observation does not block convergence" || bad "check-converged: observation broke convergence"
+[[ -z "$(bash "$SUT" open-findings "$D" 2>/dev/null)" ]] && ok "observations: open-findings still empty alongside observation" || bad "observations: leaked into open-findings"
+
+# a doc with NO observations -> gate-summary output byte-identical to before (dormant/additive)
+out_noobs="$(bash "$SUT" gate-summary "$G" claude-opus-4-8 2>/dev/null)"; rc=$?
+printf '%s' "$out_noobs" | grep -q "Primary observations" && bad "observations heading leaked with no observations" || ok "observations: heading absent when no observations (dormant)"
+[[ $rc -eq 0 ]] && ok "gate-summary: exits 0 on a normal doc with no observations" || bad "gate-summary rc on no-observations doc ($rc)"
+
+## --- observations: fail loud on missing disclosure (Codex peer-review finding #1) ---
+# A "> [observation]" line NOT immediately followed by a "> — via " line must fail loud
+# (stderr message + non-zero exit), mirroring _table's fail() for findings — it must not
+# silently vanish (rc=0, no output, no error), which is what cmd_observations used to do.
+
+# mid-doc: the observation is followed by SOME other line that is not a via line.
+D="$(mkstar obs-badmid.md \
+  '> [observation] a note missing its disclosure line' \
+  '> not a via line at all')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && ok "observations: mid-doc missing via fails loud (no output)" \
+  || bad "observations mid-doc missing via (rc=$rc out='$out')"
+err="$(bash "$SUT" observations "$D" 2>&1 >/dev/null)"
+printf '%s' "$err" | grep -qi 'not followed by' && ok "observations: mid-doc stderr is fail-loud" \
+  || bad "observations mid-doc stderr (got '$err')"
+
+# end-of-doc: the observation is the LAST line of ## Review — no via line follows at all.
+D="$(mkstar obs-badend.md \
+  '> [observation] a trailing note with no disclosure line')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ $rc -ne 0 && -z "$out" ]] && ok "observations: end-of-doc missing via fails loud (no output)" \
+  || bad "observations end-of-doc missing via (rc=$rc out='$out')"
+err="$(bash "$SUT" observations "$D" 2>&1 >/dev/null)"
+printf '%s' "$err" | grep -qi 'not followed by' && ok "observations: end-of-doc stderr is fail-loud" \
+  || bad "observations end-of-doc stderr (got '$err')"
+
+# a well-formed observation is unaffected by the fail-loud change (belt-and-suspenders re-check)
+D="$(mkstar obs-good2.md \
+  '> [observation] a properly disclosed note' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" observations "$D" 2>/dev/null)"; rc=$?
+[[ "$out" == "a properly disclosed note" && $rc -eq 0 ]] \
+  && ok "observations: well-formed still passes after fail-loud fix" \
+  || bad "observations well-formed regressed (out='$out' rc=$rc)"
+
+# gate-summary must not silently swallow a malformed observation either — the whole point of
+# the fix is that it must not silently vanish from the gate summary, so gate-summary fails
+# loud too rather than quietly proceeding without it.
+D="$(mkstar obsgate-bad.md \
+  '> [observation] gate summary should not swallow this' \
+  '> not a via line')"
+bash "$SUT" gate-summary "$D" claude-opus-4-8 >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "gate-summary: malformed observation fails loud (not silently dropped)" \
+  || bad "gate-summary malformed observation swallowed"
+
+## --- compose-review / compose-inline (Task A4, dormant PR-publish composers) ---
+# one agreed ANCHORED finding + one agreed UN-anchored finding
+ANCHORED_DOC="$(mkstar anchored.md \
+  '> [finding:codex-rd1-a|high] anchored concern' '> — via gpt-5.5' '> — risk: some risk' '> — at scripts/foo.sh:42' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8' \
+  '> [finding:codex-rd1-b|low] un-anchored concern' '> — via gpt-5.5' '> — risk: some risk' \
+  '> [agree:codex-rd1-b]' '> — via claude-opus-4-8')"
+
+# compose-inline emits exactly the anchored agreed finding as TSV (end col empty for a single line)
+out="$(bash "$SUT" compose-inline "$ANCHORED_DOC" 2>/dev/null)"
+printf '%s\n' "$out" | grep -qE '^scripts/foo\.sh'$'\t''42'$'\t'$'\t' && ok "compose-inline: anchored agreed -> TSV" || bad "compose-inline tsv (got '$out')"
+[[ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]] && ok "compose-inline: exactly one record" || bad "compose-inline record count (got '$out')"
+# un-anchored agreed finding is NOT in inline output
+printf '%s\n' "$out" | grep -q "un-anchored concern" && bad "compose-inline leaked un-anchored" || ok "compose-inline: un-anchored excluded"
+# body carries the disclosure + concern text
+printf '%s\n' "$out" | grep -qF 'anchored concern — risk: some risk — 🤖 multi-review star review (gpt-5.5 + claude-opus-4-8)' && ok "compose-inline: body + disclosure" || bad "compose-inline body (got '$out')"
+
+# compose-review includes both agreed findings + disclosure footer
+body="$(bash "$SUT" compose-review "$ANCHORED_DOC" claude-opus-4-8 2>/dev/null)"
+printf '%s' "$body" | grep -q "AI agent" && ok "compose-review: disclosure present" || bad "compose-review disclosure"
+printf '%s' "$body" | grep -q "anchored concern" && printf '%s' "$body" | grep -q "un-anchored concern" \
+  && ok "compose-review: both agreed findings listed" || bad "compose-review missing a finding (got: $body)"
+printf '%s' "$body" | grep -qF 'claude-opus-4-8' && ok "compose-review: primary named in footer" || bad "compose-review footer missing primary"
+
+# a range anchor emits start+end
+RANGE_DOC="$(mkstar range.md \
+  '> [finding:codex-rd1-a|med] ranged concern' '> — via gpt-5.5' '> — risk: r' '> — at scripts/bar.sh:10-12' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" compose-inline "$RANGE_DOC" 2>/dev/null)"
+printf '%s\n' "$out" | grep -qF 'scripts/bar.sh	10	12	' && ok "compose-inline: range start+end" || bad "compose-inline range (got '$out')"
+
+# a disputed anchored finding is NOT inline (only agreed ships inline)
+DISPUTE_DOC="$(mkstar dispute.md \
+  '> [finding:codex-rd1-a|high] disputed concern' '> — via gpt-5.5' '> — risk: r' '> — at scripts/baz.sh:1' \
+  '> [dispute:codex-rd1-a] no' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" compose-inline "$DISPUTE_DOC" 2>/dev/null)"
+[[ -z "$out" ]] && ok "compose-inline: disputed anchored finding excluded" || bad "compose-inline leaked dispute (got '$out')"
+
+# an open (unresponded) anchored finding is NOT inline
+OPEN_DOC="$(mkstar openanchor.md \
+  '> [finding:codex-rd1-a|high] open concern' '> — via gpt-5.5' '> — risk: r' '> — at scripts/qux.sh:1')"
+out="$(bash "$SUT" compose-inline "$OPEN_DOC" 2>/dev/null)"
+[[ -z "$out" ]] && ok "compose-inline: open anchored finding excluded" || bad "compose-inline leaked open (got '$out')"
+
+## --- malformed anchor: PRESENT-but-malformed hard-fails; ABSENT falls to summary (fix for the
+## silent-degrade-vs-peer finding). Mirrors multi-review-peer.sh's _table fail() rejection cases.
+
+# (a) ABSENT anchor (no "> — at" line at all) -> compose-inline still succeeds (exit 0) and
+# simply omits the finding from inline output — this is the behavior that must be PRESERVED.
+ABSENT_ANCHOR_DOC="$(mkstar absentanchor.md \
+  '> [finding:codex-rd1-a|low] no anchor at all' '> — via gpt-5.5' '> — risk: r' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" compose-inline "$ABSENT_ANCHOR_DOC" 2>/dev/null)"; rc=$?
+[[ $rc -eq 0 && -z "$out" ]] && ok "compose-inline: absent anchor -> exit 0, falls to summary" || bad "compose-inline absent anchor (rc=$rc out='$out')"
+
+# (b) PRESENT-but-MALFORMED anchors -> compose-inline hard-fails (exit non-zero, contract
+# violation to stderr) instead of silently dropping the finding to the summary.
+EMPTYPATH_DOC="$(mkstar emptypath.md \
+  '> [finding:codex-rd1-a|high] bad anchor - empty path' '> — via gpt-5.5' '> — risk: r' '> — at :42' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+bash "$SUT" compose-inline "$EMPTYPATH_DOC" >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "compose-inline: empty-path anchor hard-fails" || bad "compose-inline empty-path anchor did not fail"
+
+NONNUMERIC_DOC="$(mkstar nonnumeric.md \
+  '> [finding:codex-rd1-a|high] bad anchor - non-numeric suffix' '> — via gpt-5.5' '> — risk: r' '> — at scripts/foo.sh:abc' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+bash "$SUT" compose-inline "$NONNUMERIC_DOC" >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "compose-inline: non-numeric-suffix anchor hard-fails" || bad "compose-inline non-numeric anchor did not fail"
+
+ENDLTSTART_DOC="$(mkstar endltstart.md \
+  '> [finding:codex-rd1-a|high] bad anchor - end < start' '> — via gpt-5.5' '> — risk: r' '> — at scripts/foo.sh:10-5' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+bash "$SUT" compose-inline "$ENDLTSTART_DOC" >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "compose-inline: end<start anchor hard-fails" || bad "compose-inline end<start anchor did not fail"
+
+# stderr carries a contract-violation message (fail-loud), not silence
+err="$(bash "$SUT" compose-inline "$EMPTYPATH_DOC" 2>&1 >/dev/null)"
+printf '%s' "$err" | grep -qi "contract violation" && ok "compose-inline: malformed anchor stderr is fail-loud" || bad "compose-inline malformed anchor stderr (got '$err')"
+
+## --- anchor_of SIGPIPE false-failure on large docs (finding #1) ---
+# anchor_of's success branch used to `print ...; exit` the moment it found the anchor, without
+# draining review_section/strip_fences to EOF. Once the ## Review section exceeds the OS pipe
+# buffer (~16KB on macOS), the upstream stages are still writing when awk exits, they take
+# SIGPIPE, and with `pipefail` set that surfaces as anchor_of's own exit status — falsely
+# tripping cmd_compose_inline's "contract violation" die() on a perfectly valid, merely large,
+# doc. Build a >32KB ## Review section with the target anchored+agreed finding near the TOP
+# (so it's found early and awk would exit long before the padding below it is drained) and pad
+# with many additional finding/response blocks past the pipe-buffer threshold.
+BIGARGS=(
+  '> [finding:codex-rd1-a|high] anchored concern near top' '> — via gpt-5.5' '> — risk: some risk' '> — at scripts/foo.sh:42' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8'
+)
+for i in $(seq 1 400); do
+  BIGARGS+=(
+    "> [finding:pad-rd1-p${i}|low] padding finding number ${i} with extra filler text to grow the section past typical OS pipe buffers"
+    '> — via gpt-5.5'
+    "> — risk: padding risk ${i}"
+    "> [agree:pad-rd1-p${i}]"
+    '> — via claude-opus-4-8'
+  )
+done
+BIG_DOC="$(mkstar biganchor.md "${BIGARGS[@]}")"
+[[ "$(awk '/^## Review/{f=1;next} f' "$BIG_DOC" | wc -c)" -gt 32768 ]] || bad "test setup: big doc review section not >32KB"
+out="$(bash "$SUT" compose-inline "$BIG_DOC" 2>/dev/null)"; rc=$?
+[[ $rc -eq 0 ]] && ok "compose-inline: large (>32KB) anchored doc exits 0 (no SIGPIPE false-failure)" \
+  || bad "compose-inline large doc rc (got $rc)"
+printf '%s\n' "$out" | grep -qE '^scripts/foo\.sh'$'\t''42'$'\t'$'\t' \
+  && ok "compose-inline: large doc still emits the anchored finding's TSV" \
+  || bad "compose-inline large doc tsv (got '$out')"
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi

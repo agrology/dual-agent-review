@@ -5,9 +5,13 @@
 #   resolve-set [--reviewers csv]
 #   available
 #   open-findings <doc>
+#   observations <doc>
 #   merge --round N [--quarantined p:reason ...] <doc> <copy> ...
 #   check-converged <doc>
 #   gate-summary <doc> <primary-model-id>
+#   compose-review <doc> <primary-model-id>  -> neutral PR review body (dormant; Task A4)
+#   compose-inline <doc>                     -> "path\tstart\tend\tbody" per agreed+anchored
+#                                                finding (dormant; Task A4)
 set -uo pipefail
 
 die() { echo "multi-review-star: $1" >&2; exit "${2:-1}"; }
@@ -104,9 +108,16 @@ parse_set() {
 }
 
 cmd_resolve_set() {
-  local raw seen="" id row out=""
-  raw="$(parse_set "$@")" || exit $?
-  # normalize whitespace; dedup preserving order
+  local raw seen="" id row out="" fable_floor=0 args=()
+  # peel --fable-floor out of the args passed to parse_set (parse_set ignores unknown flags,
+  # but we must consume it here so it doesn't reach an id slot)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --fable-floor) fable_floor=1; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  raw="$(parse_set ${args[@]+"${args[@]}"})" || exit $?
   for id in $raw; do
     case " $seen " in *" $id "*) continue ;; esac
     seen="$seen $id"
@@ -114,7 +125,13 @@ cmd_resolve_set() {
       || die "unknown reviewer provider in set: ${id}" 2
     out="${out}${row}"$'\n'
   done
-  [[ -n "$out" ]] || exit 3            # empty set -> not star mode
+  if (( fable_floor )); then
+    case " $seen " in *" fable "*) : ;; *)
+      row="$("$REVIEWER_SH" resolve --reviewer fable 2>/dev/null)" || die "fable unavailable" 2
+      out="${out}${row}"$'\n' ;;
+    esac
+  fi
+  [[ -n "$out" ]] || exit 3            # empty set -> not star (legacy path only; unreachable with --fable-floor)
   printf '%s' "$out"
 }
 
@@ -213,6 +230,30 @@ cmd_open_findings() { # <doc> -> ids with state==open
   printf '%s\n' "$t" | awk -F'\t' '$3 == "open" { print $1 }'
 }
 
+# cmd_observations <doc> -> observation text per line. A primary observation is a human-gate-only
+# note, NOT a finding: `> [observation] <text>` + required `> — via <model>` pair, in ## Review.
+# Never parsed by _table (verb set stays finding|agree|dispute) — never enters the manifest,
+# never affects check-converged.
+# A `> [observation]` line NOT immediately followed by its `> — via <model>` line — including at
+# end-of-input — fails loud (stderr message, exit 2), mirroring _table's fail() for findings.
+# An undisclosed observation must not silently vanish from the gate summary (Codex peer review).
+cmd_observations() { # <doc> -> observation text per line; exit 2 on an undisclosed observation
+  local doc="${1:?doc}"
+  [[ -f "$doc" ]] || die "doc not found: $doc" 1
+  review_section "$doc" | strip_fences /dev/stdin | awk '
+    function fail(m){ print "multi-review-star: " m > "/dev/stderr"; exit 2 }
+    {
+      line = $0
+      if (pend) {
+        if (line ~ /^> — via /) { print ptxt; pend = 0; next }
+        else { fail("observation not followed by a \"> — via <model>\" line") }
+      }
+      if (line ~ /^> \[observation] /) { ptxt = line; sub(/^> \[observation] /, "", ptxt); pend = 1 }
+    }
+    END { if (pend) fail("observation not followed by a \"> — via <model>\" line") }
+  '
+}
+
 provider_of_copy() { # <doc> <copy> -> provider (exact suffix after "<doc>.")
   local doc="$1" copy="$2"
   local p="${copy#${doc}.}"   # exact prefix strip (r8), not ${##*.}
@@ -256,6 +297,115 @@ finding_block_hash() { # <doc> <ns-id>
     grab && /^> — / { print; next }
     grab { grab=0 }
   ' | sha
+}
+
+# anchor_of <doc> <ns-id> -> "path\tstart\tend" (end may be empty) if that finding's block
+# carries a valid "> — at <path>:<lineinfo>" line, else empty output (exit 0) — that's the ABSENT
+# case (no "> — at" line at all): the finding falls to the summary, same as always. A PRESENT but
+# MALFORMED anchor (empty path, no numeric ":N"/":N-M" suffix, or end<start) is a contract
+# violation and hard-fails (exit 2, message to stderr) rather than silently degrading — mirrors
+# multi-review-peer.sh's _table fail() on exactly these same rejection conditions. Live in a
+# standalone reader — not folded into _table's column contract (brief: keep _table's 8-column
+# shape untouched). Block-scoping mirrors finding_block_hash's literal index() match.
+anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty; exit 2 on malformed anchor
+  local doc="$1" id="$2"
+  # Drains its awk to EOF (no early `exit` on the success path) rather than printing and exiting
+  # immediately — mirrors finding_block_hash's SIGPIPE-safe pattern. An early exit here would
+  # leave review_section/strip_fences writing into a closed pipe once the ## Review section
+  # exceeds the OS pipe buffer, and with `pipefail` set that SIGPIPE surfaces as this function's
+  # exit status, falsely tripping callers' "contract violation" checks on large-but-valid docs.
+  review_section "$doc" | strip_fences /dev/stdin | awk -v id="$id" '
+    function fail(m){ print "multi-review-star: " m > "/dev/stderr"; exit 2 }
+    (index($0, "> [finding:" id "|") == 1 || index($0, "> [finding:" id "]") == 1) { grab=1; next }
+    grab && /^> — at / {
+      a = $0; sub(/^> — at[ ]*/, "", a); gsub(/[ \t]+$/, "", a)
+      if (match(a, /:[0-9]+(-[0-9]+)?$/)) {
+        nums = substr(a, RSTART + 1)
+        path = substr(a, 1, RSTART - 1)
+        if (path == "") fail("empty path in > — at for finding: " id)
+        d = index(nums, "-")
+        if (d == 0) { st = nums + 0; en = "" }
+        else { st = substr(nums, 1, d - 1) + 0; en = substr(nums, d + 1) + 0 }
+        if (en != "" && en < st) fail("> — at end < start for finding: " id)
+        out = path "\t" st "\t" en
+        grab = 0; next
+      }
+      fail("malformed > — at anchor for finding " id ": " $0)
+    }
+    grab && /^> — / { next }
+    grab { grab=0 }
+    END { if (out != "") print out }
+  '
+}
+
+cmd_compose_review() { # <doc> <primary-model> -> neutral star review body on stdout
+  local doc="${1:?doc}" primary="${2:?primary-model}" t
+  t="$(_table "$doc")" || die "cannot compose: contract violation in $doc" 1
+  # _table columns (tab-separated): id, raiser, state, responder, concern, dwhy, sev, risk.
+  # Use awk -F'\t' to avoid bash IFS-whitespace collapsing of adjacent empty tab fields.
+  printf '%s\n' "$t" | awk -F'\t' -v primary="$primary" '
+    function emit(want,   lvl, i, levels) {
+      split("high med low", levels, " ")
+      for (lvl = 1; lvl <= 3; lvl++)
+        for (i = 1; i <= n; i++)
+          if (st[i] == want && sv[i] == levels[lvl]) print txt[i]
+      print ""
+    }
+    BEGIN { n=0; agreed_n=0; dissent_n=0; open_n=0; nsec=0 }
+    NF < 3 { next }
+    {
+      id=$1; raiser=$2; state=$3; resp=$4; concern=$5; dwhy=$6; sev=$7; risk=$8
+      if (raiser != "" && raiser != primary && !(raiser in secseen)) { secseen[raiser]=1; seclist[++nsec]=raiser }
+      emoji = (sev=="high") ? "🔴" : (sev=="med") ? "🟠" : (sev=="low") ? "🟡" : ""
+      line = emoji " " sev " — " concern " — risk: " risk
+      if (state == "dissent")   line = line " — flagged by " raiser "; " resp " disputes: " dwhy
+      else if (state == "open") line = line " — raised by " raiser ", no response yet"
+      n++; st[n]=state; sv[n]=sev; txt[n]=line
+      if (state == "agreed")       agreed_n++
+      else if (state == "dissent") dissent_n++
+      else if (state == "open")    open_n++
+    }
+    END {
+      printf "## Multi-review\n\n"
+      if (agreed_n == 0 && dissent_n == 0 && open_n == 0) {
+        printf "No findings.\n\n"
+      } else {
+        if (agreed_n  > 0) { printf "**Agreed findings (%d)**\n", agreed_n;  emit("agreed") }
+        if (dissent_n > 0) { printf "**Disagreements (%d)**\n",   dissent_n; emit("dissent") }
+        if (open_n    > 0) { printf "**Open / unresolved (%d)**\n", open_n;  emit("open") }
+      }
+      models = primary
+      for (i = 1; i <= nsec; i++) models = models " + " seclist[i]
+      printf "———\n🤖 Posted by AI agents (%s) via multi-review star review.\n", models
+    }
+  '
+}
+
+cmd_compose_inline() { # <doc> -> "path\tstart\tend\tbody" per agreed+anchored finding
+  local doc="${1:?doc}" t
+  t="$(_table "$doc")" || die "cannot compose inline: contract violation in $doc" 1
+  local rec id raiser state resp concern sev risk anchor path start end body emoji
+  while IFS= read -r rec; do
+    [[ -n "$rec" ]] || continue
+    id="$(awk -F'\t' '{print $1}' <<< "$rec")"
+    raiser="$(awk -F'\t' '{print $2}' <<< "$rec")"
+    state="$(awk -F'\t' '{print $3}' <<< "$rec")"
+    resp="$(awk -F'\t' '{print $4}' <<< "$rec")"
+    concern="$(awk -F'\t' '{print $5}' <<< "$rec")"
+    sev="$(awk -F'\t' '{print $7}' <<< "$rec")"
+    risk="$(awk -F'\t' '{print $8}' <<< "$rec")"
+    [[ "$state" == "agreed" ]] || continue
+    anchor="$(anchor_of "$doc" "$id")" || die "cannot compose inline: contract violation in $doc" 1
+    [[ -n "$anchor" ]] || continue
+    path="$(awk -F'\t' '{print $1}' <<< "$anchor")"
+    start="$(awk -F'\t' '{print $2}' <<< "$anchor")"
+    end="$(awk -F'\t' '{print $3}' <<< "$anchor")"
+    emoji="🔴"; [[ "$sev" == "med" ]] && emoji="🟠"; [[ "$sev" == "low" ]] && emoji="🟡"
+    body="${emoji} ${sev} — ${concern} — risk: ${risk} — 🤖 multi-review star review (${raiser}"
+    [[ -n "$resp" ]] && body="${body} + ${resp}"
+    body="${body})"
+    printf '%s\t%s\t%s\t%s\n' "$path" "$start" "$end" "$body"
+  done <<< "$t"
 }
 
 cmd_merge() {
@@ -394,7 +544,14 @@ cmd_check_converged() {
 }
 
 cmd_gate_summary() {
-  local doc="${1:?doc}" primary="${2:?primary-model-id}" t
+  local doc="${1:?doc}" primary="${2:?primary-model-id}" t flag_independence=0
+  shift 2
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --flag-independence) flag_independence=1; shift ;;
+      *) die "gate-summary: unknown argument: $1" 2 ;;
+    esac
+  done
   [[ -f "$doc" ]] || die "doc not found: $doc" 1
   t="$(_table "$doc")" || die "gate-summary: contract violation in $doc" 1
 
@@ -428,8 +585,41 @@ cmd_gate_summary() {
   # agreed findings, compactly
   printf '%s\n' "$t" | awk -F'\t' '
     $3=="agreed"{ printf "  agreed: %s — %s (via %s)\n", $7, $5, $2 }'
+
+  # primary observations (human-gate only): never a finding, never affects convergence — dormant
+  # (no heading printed) when the doc has none, so gate-summary is byte-identical without them.
+  local obs
+  obs="$(cmd_observations "$doc")" || die "gate-summary: contract violation in $doc" 1
+  if [[ -n "$obs" ]]; then
+    echo "Primary observations (human-gate only):"
+    printf '%s\n' "$obs" | while IFS= read -r line; do echo "  - $line"; done
+    echo
+  fi
+
   echo "———"
   echo "🤖 Star review gate summary — primary ${primary}. Human gate decides; nothing auto-merges."
+
+  if (( flag_independence )); then
+    # Admitted providers come from the DOCUMENT's finding ns-id prefixes (same
+    # <provider>-rd<N>-<id> split the awk summary above already uses for secs[]) — not a
+    # manifest sidecar — so gate-summary stays standalone over just <doc> <primary-model-id>.
+    local admitted_providers pvendor admitted_xvendor=0 p v q_xvendor qp qv
+    admitted_providers="$(printf '%s\n' "$t" | awk -F'\t' 'NF{p=$1; sub(/-rd.*/,"",p); print p}' | sort -u)"
+    pvendor="$("$REVIEWER_SH" vendor-of-model "$primary" 2>/dev/null || echo unknown)"
+    for p in $admitted_providers; do
+      v="$("$REVIEWER_SH" resolve --reviewer "$p" 2>/dev/null | cut -d'|' -f2)"
+      [[ -n "$v" && "$v" != "$pvendor" ]] && admitted_xvendor=1
+    done
+    if (( ! admitted_xvendor )); then
+      q_xvendor="$(grep -oE '^<!-- star-quarantined: [a-z0-9]+ ' "$doc" | awk '{print $3}' \
+        | while read -r qp; do qv="$("$REVIEWER_SH" resolve --reviewer "$qp" 2>/dev/null | cut -d'|' -f2)"; [[ -n "$qv" && "$qv" != "$pvendor" ]] && echo "$qp"; done | head -1)"
+      if [[ -n "$q_xvendor" ]]; then
+        echo "⚠ Independence: a cross-vendor secondary (${q_xvendor}) was attempted but quarantined — this run has no independent cross-vendor perspective."
+      else
+        echo "⚠ Independence: reviewed only by same-vendor secondaries — no independent cross-vendor perspective this run. Add --reviewers codex (or gemini) for architectural independence."
+      fi
+    fi
+  fi
 }
 
 main() {
@@ -439,9 +629,12 @@ main() {
     resolve-set) cmd_resolve_set "$@" ;;
     available) cmd_available "$@" ;;
     open-findings) cmd_open_findings "$@" ;;
+    observations) cmd_observations "$@" ;;
     merge) cmd_merge "$@" ;;
     check-converged) cmd_check_converged "$@" ;;
     gate-summary) cmd_gate_summary "$@" ;;
+    compose-review) cmd_compose_review "$@" ;;
+    compose-inline) cmd_compose_inline "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
