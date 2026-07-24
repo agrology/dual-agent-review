@@ -205,6 +205,12 @@ cmd_command() { # <doc> [--reviewer <id>] -> NUL-delimited argv
   esac
 }
 
+cmd_vendor_of_model() { # <model-id> -> vendor, or exit 1 if unmappable
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: multi-review-reviewer.sh vendor-of-model <model-id>" 2
+  vendor_of_model "$id" || die "cannot determine vendor from '${id}'" 1
+}
+
 cmd_notice() { # <author-model-id> [--reviewer <id>] -> one line or nothing; always exit 0
   local author="${1:-}"
   [[ -n "$author" ]] || die "usage: multi-review-reviewer.sh notice <author-model-id> [--reviewer <id>]" 2
@@ -364,7 +370,7 @@ cmd_verify_vendor() { # --baseline <snap> <doc> [--reviewer <id>]
 }
 
 # --- dispatch -------------------------------------------------------------
-sub="${1:-}"; [[ -n "$sub" ]] || die "usage: multi-review-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor> [args]" 2
+sub="${1:-}"; [[ -n "$sub" ]] || die "usage: multi-review-reviewer.sh <resolve|check|prompt|command|notice|verify-vendor|vendor-of-model> [args]" 2
 shift
 case "$sub" in
   resolve) cmd_resolve "$@" ;;
@@ -373,5 +379,6 @@ case "$sub" in
   command) cmd_command "$@" ;;
   notice)  cmd_notice "$@" ;;
   verify-vendor) cmd_verify_vendor "$@" ;;
+  vendor-of-model) cmd_vendor_of_model "$@" ;;
   *)       die "unknown subcommand: $sub" 2 ;;
 esac

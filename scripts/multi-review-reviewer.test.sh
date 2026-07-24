@@ -304,6 +304,10 @@ grep -qF 'totally-unknown-model' <<<"$out" && ok "notice names the unmappable id
 bash "$SUT" notice >/dev/null 2>&1; rc=$?
 [[ "$rc" == 2 ]] && ok "notice with no author id exits 2" || bad "notice no-arg rc=$rc (want 2)"
 
+# --- vendor-of-model: exposes notice's vendor table directly ---
+out="$(bash "$SUT" vendor-of-model claude-opus-4-8 2>/dev/null)"; [[ "$out" == "anthropic" ]] && ok "vendor-of-model: claude->anthropic" || bad "vendor-of-model claude (got '$out')"
+out="$(bash "$SUT" vendor-of-model gpt-5.5 2>/dev/null)"; [[ "$out" == "openai" ]] && ok "vendor-of-model: gpt->openai" || bad "vendor-of-model gpt (got '$out')"
+
 # --- verify-vendor fixtures: <base> is the pre-dispatch snapshot, <doc> the post-turn file ---
 mkpair() { # mkpair <name> <base-extra-lines> <new-extra-lines>; prints "base|doc"
   local b="${WORK}/$1.base.md" d="${WORK}/$1.doc.md"
