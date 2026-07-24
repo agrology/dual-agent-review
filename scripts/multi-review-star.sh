@@ -104,9 +104,16 @@ parse_set() {
 }
 
 cmd_resolve_set() {
-  local raw seen="" id row out=""
-  raw="$(parse_set "$@")" || exit $?
-  # normalize whitespace; dedup preserving order
+  local raw seen="" id row out="" fable_floor=0 args=()
+  # peel --fable-floor out of the args passed to parse_set (parse_set ignores unknown flags,
+  # but we must consume it here so it doesn't reach an id slot)
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --fable-floor) fable_floor=1; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  raw="$(parse_set "${args[@]}")" || exit $?
   for id in $raw; do
     case " $seen " in *" $id "*) continue ;; esac
     seen="$seen $id"
@@ -114,7 +121,13 @@ cmd_resolve_set() {
       || die "unknown reviewer provider in set: ${id}" 2
     out="${out}${row}"$'\n'
   done
-  [[ -n "$out" ]] || exit 3            # empty set -> not star mode
+  if (( fable_floor )); then
+    case " $seen " in *" fable "*) : ;; *)
+      row="$("$REVIEWER_SH" resolve --reviewer fable 2>/dev/null)" || die "fable unavailable" 2
+      out="${out}${row}"$'\n' ;;
+    esac
+  fi
+  [[ -n "$out" ]] || exit 3            # empty set -> not star (legacy path only; unreachable with --fable-floor)
   printf '%s' "$out"
 }
 
