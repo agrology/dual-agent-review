@@ -113,7 +113,7 @@ cmd_resolve_set() {
       *) args+=("$1"); shift ;;
     esac
   done
-  raw="$(parse_set "${args[@]}")" || exit $?
+  raw="$(parse_set ${args[@]+"${args[@]}"})" || exit $?
   for id in $raw; do
     case " $seen " in *" $id "*) continue ;; esac
     seen="$seen $id"
