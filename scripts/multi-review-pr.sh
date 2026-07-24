@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # multi-review-pr.sh — GitHub-PR ingest/publish wrapper around the file-coordination protocol.
-# The coordination engine (core/watch/wait) is unchanged; this only seeds a local scratch
+# The coordination engine (core/wait) is unchanged; this only seeds a local scratch
 # file from a PR and, after the human gate, posts ONE neutral review back. Subcommands:
 #   parse <arg>                      -> "owner|repo|number" (owner/repo empty for "#n"); exit 1 if not a PR ref
 #   resolve-repo                     -> "owner|repo" for the current repo (gh)

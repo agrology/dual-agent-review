@@ -303,8 +303,8 @@ finding_block_hash() { # <doc> <ns-id>
 # carries a valid "> — at <path>:<lineinfo>" line, else empty output (exit 0) — that's the ABSENT
 # case (no "> — at" line at all): the finding falls to the summary, same as always. A PRESENT but
 # MALFORMED anchor (empty path, no numeric ":N"/":N-M" suffix, or end<start) is a contract
-# violation and hard-fails (exit 2, message to stderr) rather than silently degrading — mirrors
-# multi-review-peer.sh's _table fail() on exactly these same rejection conditions. Live in a
+# violation and hard-fails (exit 2, message to stderr) rather than silently degrading — the same
+# fail-loud convention _table itself uses on a malformed finding block. Live in a
 # standalone reader — not folded into _table's column contract (brief: keep _table's 8-column
 # shape untouched). Block-scoping mirrors finding_block_hash's literal index() match.
 anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty; exit 2 on malformed anchor
