@@ -38,14 +38,31 @@ if [[ -f "$f" ]]; then
 fi
 
 # --- scripts self-locate from a FOREIGN cwd (spec §2 regression guard for the plugin move) ---
+# multi-review-pr.sh's publish resolves its sibling multi-review-star.sh via
+# "$(dirname "$0")", not the caller's cwd — this is the live self-locating call now that
+# auto-step.sh (the script this guard used to exercise) is gone (Phase 2 PR-B, B3).
 tmpcwd="$(mktemp -d)"
-D2="$(mktemp)"; printf '# T\n\n<!-- multi-review: awaiting-author · round 1/3 -->\n' > "$D2"
-verdict="$( cd "$tmpcwd" && bash "${ROOT}/scripts/multi-review-auto-step.sh" "$D2" awaiting-reviewer 1 2>/dev/null )"
+D2="$(mktemp -d)/scratch.md"
+cat > "$D2" <<'EOF'
+# PR review: SelfLocate
+
+<!-- multi-review-mode: star -->
+- **PR:** https://github.com/o/r/pull/1
+
+## Review
+EOF
+gstub="$(mktemp -d)"
+cat > "${gstub}/gh" <<'STUBEOF'
+#!/usr/bin/env bash
+exit 0
+STUBEOF
+chmod +x "${gstub}/gh"
+verdict="$( cd "$tmpcwd" && PATH="${gstub}:$PATH" bash "${ROOT}/scripts/multi-review-pr.sh" publish "$D2" 'test-model' 2>&1 )"
 case "$verdict" in
-  continue*|terminal*|stop*) ok "auto-step resolves siblings from a foreign cwd (got: $verdict)" ;;
-  *) bad "auto-step failed to self-locate from foreign cwd (got: '$verdict')" ;;
+  *'No such file or directory'*) bad "pr.sh publish failed to self-locate multi-review-star.sh from a foreign cwd (got: $verdict)" ;;
+  *) ok "pr.sh publish resolves sibling scripts from a foreign cwd (got: $verdict)" ;;
 esac
-rm -rf "$tmpcwd" "$D2"
+rm -rf "$tmpcwd" "$gstub" "$(dirname "$D2")"
 
 # --- reviewer-set resolution is documented in the command (star-universal) ---
 DR="${ROOT}/commands/multi-review.md"

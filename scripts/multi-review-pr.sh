@@ -8,8 +8,7 @@
 #   fence <file>                     -> backtick fence >= 3 and longer than the file's longest run
 #   seed <out> <title> <url> <author> <branch> <desc-file> <diff-file>
 #   ingest <owner> <repo> <n>        -> fetch via gh, write scratch file, print its path
-#   compose-review <scratch> <model> -> review body text from threads (+ disclosure)
-#   publish <scratch> <pr-url> <model> -> post one neutral PR review via gh
+#   publish <scratch> <model>        -> compose via multi-review-star.sh and post one neutral PR review via gh
 #   diff-valid-lines <scratch>       -> "path\tline" for every added/context (RIGHT-side) line in ## Diff
 #   validate-anchor <scratch> <path> <start> [end] -> exit 0 iff path is changed and all lines are in the diff
 set -uo pipefail
@@ -58,7 +57,7 @@ cmd_seed() { # <out> <title> <url> <author> <branch> <desc-file> <diff-file>
   } > "$out" || die "cannot write scratch file: $out" 1
 }
 
-cmd_publish() { # <scratch> <model> -> post ONE neutral review via gh
+cmd_publish() { # <scratch> <model> -> post ONE neutral review via gh (star-only)
   local scratch="${1:?scratch}" model="${2:?model}" url tmp
   [[ -f "$scratch" ]] || die "scratch file not found: $scratch" 1
   # The PR url comes from the scratch file's own "- **PR:** <url>" header (written by seed from
@@ -68,41 +67,18 @@ cmd_publish() { # <scratch> <model> -> post ONE neutral review via gh
   url="$(grep -m1 -E '^- \*\*PR:\*\* ' "$scratch" | sed -E 's/^- \*\*PR:\*\* //')"
   [[ -n "$url" ]] || die "no PR url in scratch header ('- **PR:** ...'): $scratch" 1
   tmp="$(mktemp)" || die "mktemp failed" 1
-  local mode dir; dir="$(cd "$(dirname "$0")" && pwd)"
-  # Star has its own mode-hint grammar (multi-review-star.sh) and must be checked BEFORE
-  # multi-review-peer.sh's mode switch: peer's mode() recognizes ANY "multi-review-mode: ..."
-  # header and die()s on a value it doesn't know (e.g. "star"). No production code writes a
-  # star-mode PR scratch doc yet (dormant) — this only fires once one exists.
-  if "${dir}/multi-review-star.sh" mode "$scratch" > /dev/null; then
-    if ! "${dir}/multi-review-star.sh" compose-review "$scratch" "$model" > "$tmp"; then
-      rm -f "$tmp"; die "failed to compose star review body" 1
-    fi
-    cmd_publish_peer "$scratch" "$url" "$tmp" "$dir" "multi-review-star.sh"
-    rm -f "$tmp"
-    return 0
+  local dir; dir="$(cd "$(dirname "$0")" && pwd)"
+  "${dir}/multi-review-star.sh" mode "$scratch" > /dev/null || die "not a star review doc: $scratch" 1
+  if ! "${dir}/multi-review-star.sh" compose-review "$scratch" "$model" > "$tmp"; then
+    rm -f "$tmp"; die "failed to compose star review body" 1
   fi
-  mode="$("${dir}/multi-review-peer.sh" mode "$scratch")" || die "cannot determine review mode for $scratch" 1
-  if [[ "$mode" == "peer-review" ]]; then
-    if ! "${dir}/multi-review-peer.sh" compose-review "$scratch" > "$tmp"; then
-      rm -f "$tmp"; die "failed to compose peer review body" 1
-    fi
-    cmd_publish_peer "$scratch" "$url" "$tmp" "$dir"
-    rm -f "$tmp"
-    return 0
-  fi
-  if ! cmd_compose_review "$scratch" "$model" > "$tmp"; then
-    rm -f "$tmp"; die "failed to compose review body" 1
-  fi
-  if gh pr review "$url" --comment --body-file "$tmp"; then
-    rm -f "$tmp"; echo "posted review to ${url}"
-  else
-    rm -f "$tmp"; die "gh pr review failed for ${url}" 1
-  fi
+  cmd_post_review "$scratch" "$url" "$tmp" "$dir" "multi-review-star.sh"
+  rm -f "$tmp"
 }
 
-cmd_publish_peer() { # <scratch> <url> <summary-file> <script-dir> [inline-script] — post summary + inline comments
+cmd_post_review() { # <scratch> <url> <summary-file> <script-dir> [inline-script] — post summary + inline comments
   local scratch="${1:?scratch}" url="${2:?url}" summaryf="${3:?summary}" dir="${4:?dir}"
-  local inline_script="${5:-multi-review-peer.sh}"
+  local inline_script="${5:-multi-review-star.sh}"
   local host o r n
   if [[ "$url" =~ ^https?://([^/]+)/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
     host="${BASH_REMATCH[1]}"; o="${BASH_REMATCH[2]}"; r="${BASH_REMATCH[3]}"; n="${BASH_REMATCH[4]}"
@@ -185,43 +161,6 @@ cmd_publish_peer() { # <scratch> <url> <summary-file> <script-dir> [inline-scrip
     echo "inline post rejected; posted summary-only review to ${url}" >&2; return 0
   fi
   die "gh api reviews and the summary-only retry both failed for ${url}" 1
-}
-
-cmd_compose_review() { # <scratch> <model> -> review body on stdout
-  local scratch="${1:?scratch}" model="${2:?model}" threads
-  [[ -f "$scratch" ]] || die "scratch file not found: $scratch" 1
-  # Use ONLY the final "## Review" section. seed always writes it last, but a PR description
-  # can itself contain a "## Review" heading — anchoring on the last occurrence keeps that
-  # description prose out of the posted review.
-  threads="$(awk '{ a[NR]=$0 } /^## Review[[:space:]]*$/ { last=NR } END { if (last) for (i=last+1; i<=NR; i++) print a[i] }' "$scratch")"
-
-  # The posted comment is a clean findings list, grouped Open/Addressed — NOT the turn-by-turn
-  # thread transcript. A finding is "addressed" iff its id has a matching author-resolution.
-  # Pure-bash regex extraction (no sed -E \t / awk-array portability traps on macOS).
-  local resolved=" " open_list="" addr_list="" open_n=0 addr_n=0 line id text
-  local rre='^> \[author: resolved:([A-Za-z0-9_-]+)\]'
-  local fre='^> \[reviewer:([A-Za-z0-9_-]+)\] (.*)$'
-  while IFS= read -r line; do
-    [[ "$line" =~ $rre ]] && resolved+="${BASH_REMATCH[1]} "
-  done <<< "$threads"
-  while IFS= read -r line; do
-    [[ "$line" =~ $fre ]] || continue
-    id="${BASH_REMATCH[1]}"; text="${BASH_REMATCH[2]}"
-    if [[ "$resolved" == *" ${id} "* ]]; then
-      addr_list+="- ${text}"$'\n'; addr_n=$(( addr_n + 1 ))
-    else
-      open_list+="- ${text}"$'\n'; open_n=$(( open_n + 1 ))
-    fi
-  done <<< "$threads"
-
-  printf '## Multi-review\n\n'
-  if (( open_n == 0 && addr_n == 0 )); then
-    printf 'No findings.\n\n'
-  else
-    (( open_n > 0 )) && printf '**Open (%d)**\n%s\n' "$open_n" "$open_list"
-    (( addr_n > 0 )) && printf '**Addressed (%d)**\n%s\n' "$addr_n" "$addr_list"
-  fi
-  printf -- '———\n🤖 Posted by an AI agent — %s\n' "$model"
 }
 
 cmd_resolve_repo() { # -> "owner|repo" for the current repo's default remote
@@ -318,7 +257,6 @@ main() {
     ingest)       cmd_ingest "$@" ;;
     resolve-repo) cmd_resolve_repo "$@" ;;
     scratch-path) cmd_scratch_path "$@" ;;
-    compose-review) cmd_compose_review "$@" ;;
     publish)      cmd_publish "$@" ;;
     diff-valid-lines) cmd_diff_valid_lines "$@" ;;
     validate-anchor)  cmd_validate_anchor "$@" ;;
