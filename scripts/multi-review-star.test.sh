@@ -429,6 +429,50 @@ bash "$SUT" check-converged "$D" >/dev/null 2>&1 && ok "check-converged: observa
 out_noobs="$(bash "$SUT" gate-summary "$G" claude-opus-4-8 2>/dev/null)"
 printf '%s' "$out_noobs" | grep -q "Primary observations" && bad "observations heading leaked with no observations" || ok "observations: heading absent when no observations (dormant)"
 
+## --- compose-review / compose-inline (Task A4, dormant PR-publish composers) ---
+# one agreed ANCHORED finding + one agreed UN-anchored finding
+ANCHORED_DOC="$(mkstar anchored.md \
+  '> [finding:codex-rd1-a|high] anchored concern' '> — via gpt-5.5' '> — risk: some risk' '> — at scripts/foo.sh:42' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8' \
+  '> [finding:codex-rd1-b|low] un-anchored concern' '> — via gpt-5.5' '> — risk: some risk' \
+  '> [agree:codex-rd1-b]' '> — via claude-opus-4-8')"
+
+# compose-inline emits exactly the anchored agreed finding as TSV (end col empty for a single line)
+out="$(bash "$SUT" compose-inline "$ANCHORED_DOC" 2>/dev/null)"
+printf '%s\n' "$out" | grep -qE '^scripts/foo\.sh'$'\t''42'$'\t'$'\t' && ok "compose-inline: anchored agreed -> TSV" || bad "compose-inline tsv (got '$out')"
+[[ "$(printf '%s\n' "$out" | grep -c .)" -eq 1 ]] && ok "compose-inline: exactly one record" || bad "compose-inline record count (got '$out')"
+# un-anchored agreed finding is NOT in inline output
+printf '%s\n' "$out" | grep -q "un-anchored concern" && bad "compose-inline leaked un-anchored" || ok "compose-inline: un-anchored excluded"
+# body carries the disclosure + concern text
+printf '%s\n' "$out" | grep -qF 'anchored concern — risk: some risk — 🤖 multi-review star review (gpt-5.5 + claude-opus-4-8)' && ok "compose-inline: body + disclosure" || bad "compose-inline body (got '$out')"
+
+# compose-review includes both agreed findings + disclosure footer
+body="$(bash "$SUT" compose-review "$ANCHORED_DOC" claude-opus-4-8 2>/dev/null)"
+printf '%s' "$body" | grep -q "AI agent" && ok "compose-review: disclosure present" || bad "compose-review disclosure"
+printf '%s' "$body" | grep -q "anchored concern" && printf '%s' "$body" | grep -q "un-anchored concern" \
+  && ok "compose-review: both agreed findings listed" || bad "compose-review missing a finding (got: $body)"
+printf '%s' "$body" | grep -qF 'claude-opus-4-8' && ok "compose-review: primary named in footer" || bad "compose-review footer missing primary"
+
+# a range anchor emits start+end
+RANGE_DOC="$(mkstar range.md \
+  '> [finding:codex-rd1-a|med] ranged concern' '> — via gpt-5.5' '> — risk: r' '> — at scripts/bar.sh:10-12' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" compose-inline "$RANGE_DOC" 2>/dev/null)"
+printf '%s\n' "$out" | grep -qF 'scripts/bar.sh	10	12	' && ok "compose-inline: range start+end" || bad "compose-inline range (got '$out')"
+
+# a disputed anchored finding is NOT inline (only agreed ships inline)
+DISPUTE_DOC="$(mkstar dispute.md \
+  '> [finding:codex-rd1-a|high] disputed concern' '> — via gpt-5.5' '> — risk: r' '> — at scripts/baz.sh:1' \
+  '> [dispute:codex-rd1-a] no' '> — via claude-opus-4-8')"
+out="$(bash "$SUT" compose-inline "$DISPUTE_DOC" 2>/dev/null)"
+[[ -z "$out" ]] && ok "compose-inline: disputed anchored finding excluded" || bad "compose-inline leaked dispute (got '$out')"
+
+# an open (unresponded) anchored finding is NOT inline
+OPEN_DOC="$(mkstar openanchor.md \
+  '> [finding:codex-rd1-a|high] open concern' '> — via gpt-5.5' '> — risk: r' '> — at scripts/qux.sh:1')"
+out="$(bash "$SUT" compose-inline "$OPEN_DOC" 2>/dev/null)"
+[[ -z "$out" ]] && ok "compose-inline: open anchored finding excluded" || bad "compose-inline leaked open (got '$out')"
+
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi
 echo "all passed"

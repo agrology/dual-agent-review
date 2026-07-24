@@ -8,6 +8,9 @@
 #   merge --round N [--quarantined p:reason ...] <doc> <copy> ...
 #   check-converged <doc>
 #   gate-summary <doc> <primary-model-id>
+#   compose-review <doc> <primary-model-id>  -> neutral PR review body (dormant; Task A4)
+#   compose-inline <doc>                     -> "path\tstart\tend\tbody" per agreed+anchored
+#                                                finding (dormant; Task A4)
 set -uo pipefail
 
 die() { echo "multi-review-star: $1" >&2; exit "${2:-1}"; }
@@ -290,6 +293,105 @@ finding_block_hash() { # <doc> <ns-id>
   ' | sha
 }
 
+# anchor_of <doc> <ns-id> -> "path\tstart\tend" (end may be empty) if that finding's block
+# carries a valid "> — at <path>:<lineinfo>" line, else empty output. Anchor-parse rules mirror
+# multi-review-peer.sh's _table (":[0-9]+(-[0-9]+)?$" split; empty path or end<start rejected)
+# but live in a standalone reader — not folded into _table's column contract (brief: keep _table's
+# 8-column shape untouched). Block-scoping mirrors finding_block_hash's literal index() match.
+anchor_of() { # <doc> <ns-id> -> "path\tstart\tend" or empty
+  local doc="$1" id="$2"
+  review_section "$doc" | strip_fences /dev/stdin | awk -v id="$id" '
+    (index($0, "> [finding:" id "|") == 1 || index($0, "> [finding:" id "]") == 1) { grab=1; next }
+    grab && /^> — at / {
+      a = $0; sub(/^> — at[ ]*/, "", a); gsub(/[ \t]+$/, "", a)
+      if (match(a, /:[0-9]+(-[0-9]+)?$/)) {
+        nums = substr(a, RSTART + 1)
+        path = substr(a, 1, RSTART - 1)
+        if (path == "") { grab=0; next }
+        d = index(nums, "-")
+        if (d == 0) { st = nums + 0; en = "" }
+        else { st = substr(nums, 1, d - 1) + 0; en = substr(nums, d + 1) + 0 }
+        if (en != "" && en < st) { grab=0; next }
+        print path "\t" st "\t" en
+        exit
+      }
+      grab=0; next
+    }
+    grab && /^> — / { next }
+    grab { grab=0 }
+  '
+}
+
+cmd_compose_review() { # <doc> <primary-model> -> neutral star review body on stdout
+  local doc="${1:?doc}" primary="${2:?primary-model}" t
+  t="$(_table "$doc")" || die "cannot compose: contract violation in $doc" 1
+  # _table columns (tab-separated): id, raiser, state, responder, concern, dwhy, sev, risk.
+  # Use awk -F'\t' to avoid bash IFS-whitespace collapsing of adjacent empty tab fields.
+  printf '%s\n' "$t" | awk -F'\t' -v primary="$primary" '
+    function emit(want,   lvl, i, levels) {
+      split("high med low", levels, " ")
+      for (lvl = 1; lvl <= 3; lvl++)
+        for (i = 1; i <= n; i++)
+          if (st[i] == want && sv[i] == levels[lvl]) print txt[i]
+      print ""
+    }
+    BEGIN { n=0; agreed_n=0; dissent_n=0; open_n=0; nsec=0 }
+    NF < 3 { next }
+    {
+      id=$1; raiser=$2; state=$3; resp=$4; concern=$5; dwhy=$6; sev=$7; risk=$8
+      if (raiser != "" && raiser != primary && !(raiser in secseen)) { secseen[raiser]=1; seclist[++nsec]=raiser }
+      emoji = (sev=="high") ? "🔴" : (sev=="med") ? "🟠" : (sev=="low") ? "🟡" : ""
+      line = emoji " " sev " — " concern " — risk: " risk
+      if (state == "dissent")   line = line " — flagged by " raiser "; " resp " disputes: " dwhy
+      else if (state == "open") line = line " — raised by " raiser ", no response yet"
+      n++; st[n]=state; sv[n]=sev; txt[n]=line
+      if (state == "agreed")       agreed_n++
+      else if (state == "dissent") dissent_n++
+      else if (state == "open")    open_n++
+    }
+    END {
+      printf "## Multi-review\n\n"
+      if (agreed_n == 0 && dissent_n == 0 && open_n == 0) {
+        printf "No findings.\n\n"
+      } else {
+        if (agreed_n  > 0) { printf "**Agreed findings (%d)**\n", agreed_n;  emit("agreed") }
+        if (dissent_n > 0) { printf "**Disagreements (%d)**\n",   dissent_n; emit("dissent") }
+        if (open_n    > 0) { printf "**Open / unresolved (%d)**\n", open_n;  emit("open") }
+      }
+      models = primary
+      for (i = 1; i <= nsec; i++) models = models " + " seclist[i]
+      printf "———\n🤖 Posted by AI agents (%s) via multi-review star review.\n", models
+    }
+  '
+}
+
+cmd_compose_inline() { # <doc> -> "path\tstart\tend\tbody" per agreed+anchored finding
+  local doc="${1:?doc}" t
+  t="$(_table "$doc")" || die "cannot compose inline: contract violation in $doc" 1
+  local rec id raiser state resp concern sev risk anchor path start end body emoji
+  while IFS= read -r rec; do
+    [[ -n "$rec" ]] || continue
+    id="$(awk -F'\t' '{print $1}' <<< "$rec")"
+    raiser="$(awk -F'\t' '{print $2}' <<< "$rec")"
+    state="$(awk -F'\t' '{print $3}' <<< "$rec")"
+    resp="$(awk -F'\t' '{print $4}' <<< "$rec")"
+    concern="$(awk -F'\t' '{print $5}' <<< "$rec")"
+    sev="$(awk -F'\t' '{print $7}' <<< "$rec")"
+    risk="$(awk -F'\t' '{print $8}' <<< "$rec")"
+    [[ "$state" == "agreed" ]] || continue
+    anchor="$(anchor_of "$doc" "$id")"
+    [[ -n "$anchor" ]] || continue
+    path="$(awk -F'\t' '{print $1}' <<< "$anchor")"
+    start="$(awk -F'\t' '{print $2}' <<< "$anchor")"
+    end="$(awk -F'\t' '{print $3}' <<< "$anchor")"
+    emoji="🔴"; [[ "$sev" == "med" ]] && emoji="🟠"; [[ "$sev" == "low" ]] && emoji="🟡"
+    body="${emoji} ${sev} — ${concern} — risk: ${risk} — 🤖 multi-review star review (${raiser}"
+    [[ -n "$resp" ]] && body="${body} + ${resp}"
+    body="${body})"
+    printf '%s\t%s\t%s\t%s\n' "$path" "$start" "$end" "$body"
+  done <<< "$t"
+}
+
 cmd_merge() {
   local round="" doc="" copies=() quarantined=()
   while [[ $# -gt 0 ]]; do
@@ -515,6 +617,8 @@ main() {
     merge) cmd_merge "$@" ;;
     check-converged) cmd_check_converged "$@" ;;
     gate-summary) cmd_gate_summary "$@" ;;
+    compose-review) cmd_compose_review "$@" ;;
+    compose-inline) cmd_compose_inline "$@" ;;
     *)    die "unknown subcommand: ${cmd:-<none>}" 2 ;;
   esac
 }
