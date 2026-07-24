@@ -398,6 +398,10 @@ out="$(bash "$SUT" gate-summary "$FABLE_QUARANTINED_CODEX_DOC" claude-opus-4-8 -
 printf '%s' "$out" | grep -q "attempted but quarantined" && printf '%s' "$out" | grep -q "codex" \
   && ok "independence: attempted-but-quarantined names codex" || bad "independence attempted-but-quarantined"
 
+# unknown/typo'd trailing arg must FAIL LOUD, not silently disable the flag (g1, Codex PR#10 review)
+bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 --flag-independance >/dev/null 2>&1
+[[ $? -ne 0 ]] && ok "gate-summary: unknown arg fails loud" || bad "gate-summary swallowed unknown arg (typo'd flag)"
+
 ## --- observations (Task A3) ---
 # a doc with one agreed finding + a primary observation
 D="$(mkstar obs.md \

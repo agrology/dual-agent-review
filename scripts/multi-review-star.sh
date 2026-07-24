@@ -549,7 +549,7 @@ cmd_gate_summary() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --flag-independence) flag_independence=1; shift ;;
-      *) shift ;;
+      *) die "gate-summary: unknown argument: $1" 2 ;;
     esac
   done
   [[ -f "$doc" ]] || die "doc not found: $doc" 1
