@@ -3,7 +3,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="${DIR}/multi-review-pr.sh"
-CORE="${DIR}/multi-review-core.sh"
+STAR="${DIR}/multi-review-star.sh"
 fails=0
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 ok()  { echo "  ok: $1"; }
@@ -87,9 +87,9 @@ grep -q '^## PR description' "$OUT" && ok "seed: description section" || bad "se
 grep -q '^## Diff'           "$OUT" && ok "seed: diff section"        || bad "seed diff section missing"
 grep -q '^## Review'         "$OUT" && ok "seed: review section"      || bad "seed review section missing"
 
-# seed stamps the peer-review mode hint in the header (before the first ## section)
-grep -qxF '<!-- multi-review-mode: peer-review -->' "$OUT" && ok "seed: writes mode hint" || bad "seed mode hint missing"
-awk '/^## /{exit} {print}' "$OUT" | grep -qF 'multi-review-mode: peer-review' && ok "seed: mode hint is in the header region" || bad "seed mode hint not in header"
+# seed writes NO mode hint — the command's star Arm inserts the star header (mode hint + status
+# marker) after the H1, so seeding one would create a duplicate. (Star-universal, PR-B B1.)
+awk '/^## /{exit} {print}' "$OUT" | grep -qF 'multi-review-mode' && bad "seed must not stamp a mode hint (Arm does)" || ok "seed: no mode hint (Arm inserts star header)"
 
 # diff fence sized to 4 (diff contains a 3-backtick run)
 grep -qx '````' "$OUT" && ok "seed: diff fence sized up to 4" || bad "seed fence not sized up"
@@ -100,9 +100,12 @@ while IFS= read -r dl; do
 done < "${WORK}/diff"
 ok "seed: diff lines embedded verbatim"
 
-# THE invariant (r2): the embedded '> [reviewer:rX]' (prefixed with '+') forges NO thread
-out="$(bash "$CORE" open-threads "$OUT" 2>/dev/null)"
-[[ -z "$out" ]] && ok "seed: diff content cannot forge a control line (zero open threads)" || bad "seed forged a thread (got '$out')"
+# THE invariant (r2): the embedded '> [reviewer:rX]' (prefixed with '+') lives under ## Diff,
+# never under the (last) ## Review section — multi-review-star.sh's open-findings parses only
+# that section, so it must report zero open findings for this doc. (core.sh's open-threads,
+# used here previously, no longer exists — B2 deleted it; this exercises the live command.)
+out="$(bash "$STAR" open-findings "$OUT" 2>/dev/null)"
+[[ -z "$out" ]] && ok "seed: diff content cannot forge a finding (zero open findings)" || bad "seed forged a finding (got '$out')"
 
 # --- seed: malformed args -> non-zero, no file ---
 bash "$SUT" seed "${WORK}/nope/deep/cannot" 't' 'u' 'a' 'b' "${WORK}/desc" "${WORK}/missing-diff" >/dev/null 2>&1
@@ -208,81 +211,14 @@ STUBEOF
 PATH="${RSTUB}:$PATH" bash "$SUT" resolve-repo >/dev/null 2>&1 \
   && bad "resolve-repo should fail when gh fails" || ok "resolve-repo surfaces gh failure"
 
-# --- compose-review: summary counts + threads + disclosure footer ---
-CR="${WORK}/converged.md"
-# (no marker line needed — compose-review/publish read only the ## Review section + threads)
-cat > "$CR" <<'EOF'
-# PR review: Demo
-
-## Review
-
-> [reviewer:r1] concern one
-> — via gpt-5-codex
->
-> [author: resolved:r1] fixed in seed
-> — via claude-opus-4-8
-
-> [reviewer:r2] concern two
-> — via gpt-5-codex
-EOF
-out="$(bash "$SUT" compose-review "$CR" 'Claude Opus 4.8 (claude-opus-4-8)' 2>/dev/null)"; code=$?
-[[ $code == 0 ]] && ok "compose-review: succeeds" || bad "compose-review code $code"
-# Grouped-by-status output: r2 is open (no resolution), r1 is addressed.
-grep -qF '**Open (1)**'      <<< "$out" && ok "compose-review: groups open with count"      || bad "compose-review open group (got: $out)"
-grep -qF '**Addressed (1)**' <<< "$out" && ok "compose-review: groups addressed with count" || bad "compose-review addressed group (got: $out)"
-grep -qF -- '- concern two' <<< "$out" && ok "compose-review: lists open finding text (clean)" || bad "compose-review open finding text"
-grep -qF -- '- concern one' <<< "$out" && ok "compose-review: lists addressed finding text (clean)" || bad "compose-review addressed finding text"
-# No transcript markup, no back-and-forth, no per-line attribution.
-grep -qF '[reviewer:' <<< "$out" && bad "compose-review leaked reviewer markup" || ok "compose-review: drops [reviewer:] markup"
-grep -qF '[author: resolved:' <<< "$out" && bad "compose-review leaked author markup" || ok "compose-review: drops [author: resolved:] markup"
-grep -qF '— via' <<< "$out" && bad "compose-review leaked per-line disclosure" || ok "compose-review: drops per-line — via lines"
-grep -qF '🤖 Posted by an AI agent — Claude Opus 4.8 (claude-opus-4-8)' <<< "$out" && ok "compose-review: discloses model (footer)" || bad "compose-review disclosure missing"
-# the H1/description are NOT in the body — only the findings list
-grep -q 'PR review: Demo' <<< "$out" && bad "compose-review leaked the H1" || ok "compose-review: body is just the findings list"
-
-# --- compose-review: a "## Review" heading in the PR description must not leak (last-section only) ---
-CR2="${WORK}/desc-has-review.md"
-cat > "$CR2" <<'EOF'
-# PR review: Demo2
-
-## PR description
-
-Adds review endpoints.
-
-## Review
-> [reviewer:rDESC] DESCRIPTION_LEAK — a fake thread that lives in the PR description
-
-## Diff
-
-```
-diff --git a/x b/x
-+something
-```
-
-## Review
-
-> [reviewer:r1] the only real concern
-> — via gpt-5-codex
->
-> [author: resolved:r1] done
-> — via claude-opus-4-8
-EOF
-out="$(bash "$SUT" compose-review "$CR2" 'Claude Opus 4.8 (claude-opus-4-8)' 2>/dev/null)"
-grep -q 'DESCRIPTION_LEAK' <<< "$out" && bad "compose-review leaked the description's ## Review section" || ok "compose-review: only the final ## Review section is used"
-grep -qF '**Addressed (1)**' <<< "$out" && ok "compose-review: counts scoped to the real review section" || bad "compose-review count not scoped (got: $out)"
-grep -qF 'Open (' <<< "$out" && bad "compose-review showed an Open group when none are open" || ok "compose-review: omits empty Open group"
-grep -qF -- '- the only real concern' <<< "$out" && ok "compose-review: lists the real finding (clean)" || bad "compose-review real finding missing"
-
-# --- compose-review: missing file -> non-zero ---
-bash "$SUT" compose-review "${WORK}/nofile.md" 'x' >/dev/null 2>&1 \
-  && bad "compose-review should fail on missing file" || ok "compose-review fails on missing file"
-
 # --- publish: reads the PR url from the scratch HEADER (works on resume; GHE-safe) ---
-# A scratch file as seed() writes it: a "- **PR:** <url>" header line + a ## Review section.
+# A scratch file as seed() writes it (plus the star Arm header) + a ## Review section with no
+# findings, so publish takes the zero-inline-comments path: one plain `gh pr review --comment`.
 CRP="${WORK}/scratch-with-header.md"
 cat > "$CRP" <<'EOF'
 # PR review: Demo
 
+<!-- multi-review-mode: star -->
 - **PR:** https://github.com/o/r/pull/8
 - **Author:** alice
 - **Branch:** feat/x
@@ -292,12 +228,6 @@ cat > "$CRP" <<'EOF'
 Stuff.
 
 ## Review
-
-> [reviewer:r1] concern
-> — via gpt-5-codex
->
-> [author: resolved:r1] done
-> — via claude-opus-4-8
 EOF
 
 PSTUB="${WORK}/pbin"; mkdir -p "$PSTUB"
@@ -321,8 +251,8 @@ code=$?
 [[ "$(wc -l < "$CALLLOG")" -eq 1 ]] && ok "publish: exactly one gh call" || bad "publish made $(wc -l < "$CALLLOG") gh calls"
 grep -q 'pr review https://github.com/o/r/pull/8 --comment --body-file' "$CALLLOG" \
   && ok "publish: posts neutral --comment to the header's PR url" || bad "publish gh args (got: $(cat "$CALLLOG"))"
-grep -qF '🤖 Posted by an AI agent' "${WORK}/posted-body.txt" \
-  && ok "publish: body is the composed review" || bad "publish body wrong"
+grep -qF '🤖 Posted by AI agents' "${WORK}/posted-body.txt" \
+  && ok "publish: body is the composed star review" || bad "publish body wrong (got: $(cat "${WORK}/posted-body.txt"))"
 # never approve / request-changes
 grep -qE -- '--approve|--request-changes' "$CALLLOG" && bad "publish must not approve/request-changes" || ok "publish: neutral only"
 
@@ -331,12 +261,10 @@ CRG="${WORK}/scratch-ghe.md"
 cat > "$CRG" <<'EOF'
 # PR review: GHE
 
+<!-- multi-review-mode: star -->
 - **PR:** https://github.example.com/o/r/pull/9
 
 ## Review
-
-> [reviewer:r1] c
-> [author: resolved:r1] done
 EOF
 : > "$CALLLOG"
 PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRG" 'm' >/dev/null 2>&1
@@ -344,55 +272,28 @@ grep -q 'pr review https://github.example.com/o/r/pull/9 --comment --body-file' 
   && ok "publish: uses the header url verbatim (GHE/resume-safe)" || bad "publish reconstructed wrong url (got: $(cat "$CALLLOG"))"
 
 # --- publish: a scratch with no "- **PR:**" header fails clearly (don't post to a guessed url) ---
-PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CR" 'm' >/dev/null 2>&1 \
+NOPRURL="${WORK}/no-pr-url.md"
+cat > "$NOPRURL" <<'EOF'
+# PR review: NoUrl
+
+<!-- multi-review-mode: star -->
+
+## Review
+EOF
+PATH="${PSTUB}:$PATH" bash "$SUT" publish "$NOPRURL" 'm' >/dev/null 2>&1 \
   && bad "publish should fail when the scratch has no PR url header" || ok "publish fails when no PR url in scratch"
 
-# --- publish: peer-review mode routes to the peer compose (joint review) ---
-# Restore the working gh stub (the no-PR-url test above used PSTUB but didn't break it;
-# still, reset CALLLOG and ensure the working stub is in place before the peer test).
-cat > "${PSTUB}/gh" <<STUBEOF
-#!/usr/bin/env bash
-echo "\$*" >> "${CALLLOG}"
-prev=""
-for a in "\$@"; do
-  [[ "\$prev" == "--body-file" ]] && cp "\$a" "${WORK}/posted-body.txt"
-  prev="\$a"
-done
-exit 0
-STUBEOF
-chmod +x "${PSTUB}/gh"
-CRPEER="${WORK}/peer-scratch.md"
-cat > "$CRPEER" <<'EOF'
-# PR review: Demo
+# --- publish: a non-star doc (no mode hint) is rejected — publish is star-only now ---
+NOTSTAR="${WORK}/not-star.md"
+cat > "$NOTSTAR" <<'EOF'
+# PR review: NotStar
 
-<!-- multi-review-mode: peer-review -->
 - **PR:** https://github.com/o/r/pull/8
 
 ## Review
-
-> [finding:f1|high] missing validation
-> — via gpt-5-codex
-> — risk: r
->
-> [concur:f1]
-> — via claude-opus-4-8
 EOF
-: > "$CALLLOG"
-PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRPEER" 'Claude Opus 4.8 (claude-opus-4-8)' >/dev/null 2>&1
-grep -qF 'Agreed findings' "${WORK}/posted-body.txt" && ok "publish: peer mode posts the joint review" || bad "publish peer body (got: $(cat "${WORK}/posted-body.txt"))"
-grep -qF 'Addressed (' "${WORK}/posted-body.txt" && bad "publish used the asymmetric compose in peer mode" || ok "publish: not the asymmetric compose"
-
-# --- publish: the star pre-check (multi-review-star.sh mode, run BEFORE peer/asymmetric
-# dispatch — Task A5) adds no noise to an existing peer-mode publish. CRPEER is NOT a star
-# doc, so the star pre-check must defer silently; peer-mode publish's exit code and stderr
-# must be exactly what they were before the pre-check existed (Codex peer-review finding #2).
-: > "$CALLLOG"
-err="$(PATH="${PSTUB}:$PATH" bash "$SUT" publish "$CRPEER" 'Claude Opus 4.8 (claude-opus-4-8)' 2>&1 >/dev/null)"
-code=$?
-[[ $code -eq 0 ]] && ok "publish: peer-mode succeeds with star pre-check in place" \
-  || bad "publish peer-mode code with star pre-check ($code)"
-[[ -z "$err" ]] && ok "publish: star pre-check adds no stderr noise to peer-mode publish" \
-  || bad "publish peer-mode stderr noise (got '$err')"
+PATH="${PSTUB}:$PATH" bash "$SUT" publish "$NOTSTAR" 'm' >/dev/null 2>&1 \
+  && bad "publish should refuse a scratch with no star mode hint" || ok "publish: refuses a non-star doc"
 
 # --- publish: a gh failure is surfaced ---
 cat > "${PSTUB}/gh" <<'STUBEOF'
@@ -466,7 +367,7 @@ AIN="${WORK}/inline-scratch.md"
 cat > "$AIN" <<'EOF'
 # PR review: Inline
 
-<!-- multi-review-mode: peer-review -->
+<!-- multi-review-mode: star -->
 - **PR:** https://github.com/o/r/pull/8
 
 ## Diff
@@ -487,7 +388,7 @@ diff --git a/foo.sh b/foo.sh
 > — risk: r
 > — at foo.sh:2
 >
-> [concur:f1]
+> [agree:f1]
 > — via claude-opus-4-8
 EOF
 : > "$ACALLS"
@@ -507,7 +408,7 @@ ABAD="${WORK}/inline-bad.md"
 cat > "$ABAD" <<'EOF'
 # PR review: InlineBad
 
-<!-- multi-review-mode: peer-review -->
+<!-- multi-review-mode: star -->
 - **PR:** https://github.com/o/r/pull/8
 
 ## Diff
@@ -528,7 +429,7 @@ diff --git a/foo.sh b/foo.sh
 > — risk: r
 > — at foo.sh:999
 >
-> [concur:f1]
+> [agree:f1]
 > — via claude-opus-4-8
 EOF
 : > "$ACALLS"
@@ -560,7 +461,7 @@ AMIX="${WORK}/inline-mixed.md"
 cat > "$AMIX" <<'EOF'
 # PR review: Mixed
 
-<!-- multi-review-mode: peer-review -->
+<!-- multi-review-mode: star -->
 - **PR:** https://github.com/o/r/pull/8
 
 ## Diff
@@ -581,7 +482,7 @@ diff --git a/foo.sh b/foo.sh
 > — risk: r
 > — at foo.sh:2
 >
-> [concur:f1]
+> [agree:f1]
 > — via claude-opus-4-8
 >
 > [finding:f2|med] anchor off the diff degrades to summary
@@ -589,7 +490,7 @@ diff --git a/foo.sh b/foo.sh
 > — risk: r
 > — at foo.sh:999
 >
-> [concur:f2]
+> [agree:f2]
 > — via claude-opus-4-8
 EOF
 : > "$ACALLS"
@@ -603,11 +504,14 @@ jq -e '.body | contains("anchor off the diff degrades to summary")' "${WORK}/api
 jq -e '(.body | contains("anchor off the diff degrades to summary — ð¤")) | not' "${WORK}/api-payload.json" >/dev/null && ok "publish-mixed: degraded line has no disclosure footer" || bad "publish-mixed degraded footer not stripped"
 
 # --- publish: a malformed anchor FAILS the post (contract violation), never degrades (Task 4, r1) ---
+# Needs an [agree:] response: star's compose-inline only calls anchor_of() (which validates the
+# "> — at" line and hard-fails on malformed input) for agreed findings — an unresponded (open)
+# finding is never anchor-checked, so this must be agreed to actually exercise the failure path.
 AMAL="${WORK}/inline-malformed.md"
 cat > "$AMAL" <<'EOF'
 # PR review: Malformed
 
-<!-- multi-review-mode: peer-review -->
+<!-- multi-review-mode: star -->
 - **PR:** https://github.com/o/r/pull/8
 
 ## Review
@@ -616,14 +520,16 @@ cat > "$AMAL" <<'EOF'
 > — via gpt-5-codex
 > — risk: r
 > — at foo.sh
+>
+> [agree:f1]
+> — via claude-opus-4-8
 EOF
 PATH="${ASTUB}:$PATH" bash "$SUT" publish "$AMAL" 'claude-opus-4-8' >/dev/null 2>&1 \
   && bad "publish should FAIL on a malformed-anchor contract violation, not post" \
   || ok "publish-malformed: contract violation fails the post (no silent degrade)"
 
-# --- publish: star mode dispatches through the star composer + cmd_publish_peer's posting
-# path (dormant, Task A5). No production code writes a star-mode scratch doc yet — this only
-# proves the dispatch wiring works when one exists. ---
+# --- publish: star mode dispatches through the star composer + cmd_post_review's posting
+# path — the live (only) publish path now that peer/asymmetric are retired (B3). ---
 STARSCRATCH="${WORK}/star-scratch.md"
 cat > "$STARSCRATCH" <<'EOF'
 # PR review: Star
@@ -660,7 +566,18 @@ grep -q 'api .*repos/o/r/pulls/8/reviews' "$ACALLS" && ok "publish-star: posts v
 jq -e '.comments | length == 1' "${WORK}/api-payload.json" >/dev/null && ok "publish-star: one inline comment" || bad "publish-star comment count"
 jq -e '.comments[0].path == "foo.sh" and .comments[0].line == 2' "${WORK}/api-payload.json" >/dev/null && ok "publish-star: inline anchored to foo.sh:2" || bad "publish-star inline fields"
 jq -e '.body | contains("multi-review star review")' "${WORK}/api-payload.json" >/dev/null && ok "publish-star: body carries the star composer's disclosure" || bad "publish-star body missing star disclosure (got: $(cat "${WORK}/api-payload.json"))"
-jq -e '.body | contains("Addressed (")' "${WORK}/api-payload.json" >/dev/null && bad "publish-star used the asymmetric compose" || ok "publish-star: not the asymmetric compose"
+# Read .body as text and check it with bash, rather than `jq -e '... | contains(...)' | not` —
+# the inverted jq form is vacuous: a jq runtime error (e.g. a missing/null .body) also exits
+# non-zero, same as a genuine "does not contain" result, so a broken payload would silently
+# read as "ok" instead of failing loud.
+star_body="$(jq -r '.body // empty' "${WORK}/api-payload.json")"
+if [[ -z "$star_body" ]]; then
+  bad "publish-star: could not read .body from the api payload"
+elif [[ "$star_body" == *'Addressed ('* ]]; then
+  bad "publish-star used the asymmetric compose"
+else
+  ok "publish-star: not the asymmetric compose"
+fi
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi

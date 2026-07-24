@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # multi-review-wait.sh <doc> <state> [max-seconds] — lock-free bounded wait until the
-# multi-review marker reaches <state>. For the REVIEWER side: it takes no lock and writes
-# nothing, so it can never disturb the author's watcher (which reviewers must not run).
+# multi-review marker reaches <state>. Used by the star primary during fan-out to bound the
+# wait on each secondary's working copy; it takes no lock and writes nothing.
 #
 # Exit: 0 state reached · 9 bound hit, state not reached (re-run to keep waiting) ·
 #       10 a terminal state (converged/exhausted) preempted the wait — stop, human gate ·

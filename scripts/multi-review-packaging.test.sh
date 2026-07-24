@@ -38,100 +38,100 @@ if [[ -f "$f" ]]; then
 fi
 
 # --- scripts self-locate from a FOREIGN cwd (spec §2 regression guard for the plugin move) ---
+# multi-review-pr.sh's publish resolves its sibling multi-review-star.sh via
+# "$(dirname "$0")", not the caller's cwd — this is the live self-locating call now that
+# auto-step.sh (the script this guard used to exercise) is gone (Phase 2 PR-B, B3).
 tmpcwd="$(mktemp -d)"
-D2="$(mktemp)"; printf '# T\n\n<!-- multi-review: awaiting-author · round 1/3 -->\n' > "$D2"
-verdict="$( cd "$tmpcwd" && bash "${ROOT}/scripts/multi-review-auto-step.sh" "$D2" awaiting-reviewer 1 2>/dev/null )"
-case "$verdict" in
-  continue*|terminal*|stop*) ok "auto-step resolves siblings from a foreign cwd (got: $verdict)" ;;
-  *) bad "auto-step failed to self-locate from foreign cwd (got: '$verdict')" ;;
-esac
-rm -rf "$tmpcwd" "$D2"
+D2="$(mktemp -d)/scratch.md"
+cat > "$D2" <<'EOF'
+# PR review: SelfLocate
 
-# --- route resolution is documented in the author command (spec §3) ---
+<!-- multi-review-mode: star -->
+- **PR:** https://github.com/o/r/pull/1
+
+## Review
+EOF
+gstub="$(mktemp -d)"
+cat > "${gstub}/gh" <<'STUBEOF'
+#!/usr/bin/env bash
+exit 0
+STUBEOF
+chmod +x "${gstub}/gh"
+verdict="$( cd "$tmpcwd" && PATH="${gstub}:$PATH" bash "${ROOT}/scripts/multi-review-pr.sh" publish "$D2" 'test-model' 2>&1 )"
+case "$verdict" in
+  *'No such file or directory'*) bad "pr.sh publish failed to self-locate multi-review-star.sh from a foreign cwd (got: $verdict)" ;;
+  *) ok "pr.sh publish resolves sibling scripts from a foreign cwd (got: $verdict)" ;;
+esac
+rm -rf "$tmpcwd" "$gstub" "$(dirname "$D2")"
+
+# --- reviewer-set resolution is documented in the command (star-universal) ---
 DR="${ROOT}/commands/multi-review.md"
 if [[ -f "$DR" ]]; then
   grep -q 'multi-review-reviewer.sh' "$DR" && ok "multi-review.md uses the reviewer registry" \
     || bad "multi-review.md does not reference multi-review-reviewer.sh"
-  grep -qi 'attended' "$DR" && ok "multi-review.md documents the --attended escape hatch" \
-    || bad "multi-review.md lacks --attended"
-  grep -qiE 'degrad|falling back' "$DR" && ok "multi-review.md documents announced degradation" \
-    || bad "multi-review.md lacks the degradation path"
-  grep -qi 'MULTI_REVIEW_REVIEWER=fable' "$DR" && ok "degradation message points at the zero-dep provider" \
-    || bad "degradation message does not mention MULTI_REVIEW_REVIEWER=fable"
+  grep -qF 'resolve-set --fable-floor' "$DR" && ok "resolves the set with the fable floor" \
+    || bad "multi-review.md does not resolve-set --fable-floor"
+  grep -qi 'attended' "$DR" && bad "multi-review.md still mentions the removed --attended route" \
+    || ok "no --attended route (star is autonomous-only)"
+  grep -qiE 'degrad|falling back' "$DR" && bad "multi-review.md still documents degrade-to-manual" \
+    || ok "no degrade-to-manual path"
 fi
 
-# --- §2's awaiting-reviewer branch defers to route resolution before arming (seam regression) ---
+# --- star fan-out dispatches secondaries concurrently and bounds the wait per copy ---
 if [[ -f "$DR" ]]; then
-  awaiting_reviewer_block="$(awk '/\*\*`awaiting-reviewer`\*\* → resolve the doc.s canonical/{flag=1} flag{print} flag && /Then arm|carry out the arm-the-watcher/{exit}' "$DR")"
-  echo "$awaiting_reviewer_block" | grep -q 'Go to §2\.5' \
-    && ok "§2 awaiting-reviewer branch defers to §2.5 before arming" \
-    || bad "§2 awaiting-reviewer branch does not defer to §2.5 before arming"
+  grep -q 'multi-review-wait.sh' "$DR" && ok "fan-out bounds the per-copy wait" \
+    || bad "multi-review.md does not bound the per-copy wait"
+  grep -qi 'quarantine' "$DR" && ok "a failed secondary is quarantined, not fatal" \
+    || bad "multi-review.md does not document quarantine"
 fi
 
-# --- Finding 1: --reviewer/--attended are actually PARSED, not just documented ---
+# --- §1 extracts --reviewers (only) and classifies on the positional, not raw $ARGUMENTS ---
 if [[ -f "$DR" ]]; then
-  sec1="$(awk '/^## 1\. Resolve the argument/{flag=1} flag{print} flag && /^## 2\. Arm/{exit}' "$DR")"
-  if echo "$sec1" | grep -q -- '--reviewer <id>' && echo "$sec1" | grep -q -- '--attended'; then
-    ok "§1 splits --reviewer/--attended out of \$ARGUMENTS"
-  else
-    bad "§1 does not document splitting --reviewer/--attended out of \$ARGUMENTS"
-  fi
-  # PR classification must run on the extracted positional, never the raw $ARGUMENTS (a
-  # trailing --reviewer/--attended must not corrupt PR-ref matching).
+  sec1="$(awk '/^## 1\. Resolve the argument/{flag=1} flag{print} flag && /^## 2\./{exit}' "$DR")"
+  echo "$sec1" | grep -q -- '--reviewers' && ok "§1 extracts --reviewers" \
+    || bad "§1 does not extract --reviewers"
+  echo "$sec1" | grep -q -- '--attended' && bad "§1 still mentions --attended" \
+    || ok "§1 no longer splits --attended"
   echo "$sec1" | grep -qF 'multi-review-pr.sh parse "<positional>"' \
     && ok "PR classification runs on the positional, not raw \$ARGUMENTS" \
     || bad "PR classification does not run on <positional>"
   grep -qF 'multi-review-pr.sh parse "$ARGUMENTS"' "$DR" \
     && bad "PR classification still runs on the raw \$ARGUMENTS" \
     || ok "no PR classification call runs on the raw \$ARGUMENTS"
-
-  # §2.5 must forward the extracted --reviewer flag to `resolve` (joined across line wraps —
-  # this is prose, not a shell command, so the flag and the call may wrap onto separate lines).
-  sec25="$(awk '/^## 2\.5 Resolve the route/{flag=1} flag{print} flag && /^## 3\. On each wake/{exit}' "$DR")"
-  echo "$sec25" | tr '\n' ' ' | grep -qE 'reviewer\.sh resolve`, appending[^.]*--reviewer' \
-    && ok "§2.5 forwards --reviewer to resolve" \
-    || bad "§2.5 does not forward --reviewer to resolve"
 fi
 
-# --- the unattended loop verifies reviewer identity BEFORE validating transitions ---
+# --- identity is verified per copy; the gate carries the cross-vendor independence flag ---
 if [[ -f "$DR" ]]; then
   grep -q 'verify-vendor' "$DR" && ok "multi-review.md runs verify-vendor" \
     || bad "multi-review.md never runs verify-vendor"
   grep -q -- '--baseline' "$DR" && ok "multi-review.md passes a baseline snapshot" \
     || bad "multi-review.md does not pass --baseline"
-  # verify-vendor must appear BEFORE auto-step in the dispatch section.
-  # Match the actual INVOCATIONS (they carry the "<doc>" argument), not prose mentions —
-  # §3.5 opens with "Repeat until `multi-review-auto-step.sh` returns …", which would
-  # otherwise be picked up as the first occurrence and invert the comparison.
-  vv="$(grep -nF 'verify-vendor --baseline' "$DR" | head -1 | cut -d: -f1)"
-  as="$(grep -nF 'multi-review-auto-step.sh "<doc>"' "$DR" | head -1 | cut -d: -f1)"
-  if [[ -n "$vv" && -n "$as" && "$vv" -lt "$as" ]]; then
-    ok "identity check is ordered before auto-step"
-  else
-    bad "verify-vendor must precede auto-step (vv=$vv auto-step=$as)"
-  fi
-  grep -q 'multi-review-reviewer.sh notice' "$DR" && ok "the human gate prints the independence notice" \
-    || bad "notice is not printed at the human gate"
-  # the provider is resolved ONCE (§2.5) and carried; the loop must not re-resolve
-  grep -qi 'resolved once in' "$DR" && ok "the loop reuses the provider resolved in §2.5" \
-    || bad "multi-review.md does not state the provider is resolved once and carried"
-  [[ "$(grep -cF 'multi-review-reviewer.sh resolve' "$DR")" -eq 1 ]] \
-    && ok "resolve is invoked exactly once in the command" \
-    || bad "resolve appears more than once — the loop may re-resolve mid-run"
+  grep -qF 'gate-summary "<doc>" "<primary-model-id>" --flag-independence' "$DR" \
+    && ok "the human gate carries the cross-vendor independence flag" \
+    || bad "gate-summary is not run with --flag-independence at the gate"
+  # the set is resolved in §2 (resume + fresh checks) and carried — not re-resolved per round
+  [[ "$(grep -cF 'multi-review-star.sh resolve-set' "$DR")" -le 2 ]] \
+    && ok "resolve-set is invoked at most twice (resume + fresh), not per-round" \
+    || bad "resolve-set appears too often — the loop may re-resolve mid-run"
+  grep -qE 'multi-review-(watch|auto-step)\.sh|open-threads|author-done' "$DR" \
+    && bad "multi-review.md still references a removed single-reviewer helper" \
+    || ok "no references to removed watch/auto-step/asymmetric helpers"
 fi
 
-# --- the baseline snapshot is taken inside §3.5, immediately before reviewer dispatch (Finding 2) ---
+# --- the baseline snapshot is taken in Fan-out, before dispatching secondaries ---
 if [[ -f "$DR" ]]; then
-  h35="$(grep -nF '## 3.5 The unattended loop' "$DR" | head -1 | cut -d: -f1)"
-  h4="$(grep -nF '## 4. Terminal' "$DR" | head -1 | cut -d: -f1)"
-  cp_line="$(grep -nF 'cp "<doc>" "<doc>.baseline"' "$DR" | head -1 | cut -d: -f1)"
-  dispatch_line="$(grep -nF 'c. Branch on `kind`:' "$DR" | head -1 | cut -d: -f1)"
-  if [[ -n "$h35" && -n "$h4" && -n "$cp_line" && -n "$dispatch_line" \
-        && "$cp_line" -gt "$h35" && "$cp_line" -lt "$h4" && "$cp_line" -lt "$dispatch_line" ]]; then
-    ok "baseline snapshot is taken inside §3.5, before reviewer dispatch"
+  cp_line="$(grep -nF 'Copy `<doc>` to `<doc>.baseline`' "$DR" | head -1 | cut -d: -f1)"
+  dispatch_line="$(grep -nF 'Dispatch every secondary' "$DR" | head -1 | cut -d: -f1)"
+  gate_line="$(grep -nF '### Terminal gate' "$DR" | head -1 | cut -d: -f1)"
+  if [[ -n "$cp_line" && -n "$dispatch_line" && -n "$gate_line" \
+        && "$cp_line" -lt "$dispatch_line" && "$dispatch_line" -lt "$gate_line" ]]; then
+    ok "baseline snapshot precedes secondary dispatch"
   else
-    bad "baseline snapshot ordering wrong (h3.5=$h35 h4=$h4 cp=$cp_line dispatch=$dispatch_line)"
+    bad "baseline/dispatch ordering wrong (cp=$cp_line dispatch=$dispatch_line gate=$gate_line)"
   fi
+  grep -qiE 'adaptive re-fan-out' "$DR" \
+    && ok "primary turn documents adaptive re-fan-out" \
+    || bad "multi-review.md does not document adaptive re-fan-out"
 fi
 
 # --- no dangling references to the removed /multi-review-auto command ---

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # multi-review-reviewer.test.sh — reviewer provider registry: resolution, availability,
-# prompt emission, independence notice, reviewer-identity verification.
+# prompt emission, reviewer-identity verification.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="${DIR}/multi-review-reviewer.sh"
@@ -9,11 +9,10 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 ok()  { echo "  ok: $1"; }
 bad() { echo "  FAIL: $1"; fails=$((fails+1)); }
 
-# Both selection variables are cleared for the whole suite. They are documented user-facing
-# overrides, so an engineer running the gate with either exported would otherwise see
-# assertions fail against a CORRECT implementation. Tests that exercise the overrides set
-# them explicitly and locally.
-unset MULTI_REVIEW_REVIEWER MULTI_REVIEW_REVIEWER_MODEL
+# Cleared for the whole suite. It is a documented user-facing override, so an engineer
+# running the gate with it exported would otherwise see assertions fail against a CORRECT
+# implementation. Tests that exercise the override set it explicitly and locally.
+unset MULTI_REVIEW_REVIEWER_MODEL
 
 mkdoc() { # mkdoc <name> <state>; prints path
   local p="${WORK}/$1"
@@ -30,23 +29,15 @@ awk '{print} /gemini\) echo "gemini\|google\|shell/{print "    ghost)  echo \"gh
   "$SUT" > "$UNHANDLED"
 grep -q '^    ghost)' "$UNHANDLED" || { echo "FIXTURE SETUP FAILED: ghost arm not inserted"; exit 1; }
 
-# --- resolve: default is codex ---
-out="$(env -u MULTI_REVIEW_REVIEWER bash "$SUT" resolve 2>/dev/null)"; rc=$?
-[[ "$rc" == 0 ]] && ok "resolve exits 0" || bad "resolve rc=$rc (want 0)"
-[[ "$out" == "codex|openai|subagent|gpt-5.5|yes" ]] \
-  && ok "default provider is codex" || bad "default row was '$out'"
+# --- resolve: --reviewer is required (no singular env default, no implicit provider) ---
+err="$(bash "$SUT" resolve 2>&1 >/dev/null)"; rc=$?
+[[ "$rc" == 2 ]] && ok "resolve with no --reviewer exits 2" || bad "resolve no-flag rc=$rc (want 2)"
+grep -qi 'required' <<<"$err" && ok "resolve no-flag error explains --reviewer is required" \
+  || bad "resolve no-flag error unclear: '$err'"
 
-# --- resolve: env var selects ---
-out="$(MULTI_REVIEW_REVIEWER=fable bash "$SUT" resolve 2>/dev/null)"
-[[ "$out" == "fable|anthropic|subagent|fable|no" ]] \
-  && ok "MULTI_REVIEW_REVIEWER selects fable" || bad "env row was '$out'"
-
-# --- resolve: flag beats env (precedence) ---
-out="$(MULTI_REVIEW_REVIEWER=fable bash "$SUT" resolve --reviewer codex 2>/dev/null)"
-[[ "$out" == codex\|* ]] && ok "--reviewer flag overrides the env var" || bad "precedence row was '$out'"
-
-# --- resolve: codex default is overridable (nothing is unoverridable) ---
-out="$(env -u MULTI_REVIEW_REVIEWER bash "$SUT" resolve --reviewer codex 2>/dev/null)"
+# --- resolve: codex's own default model is overridable (nothing is unoverridable) ---
+out="$(bash "$SUT" resolve --reviewer codex 2>/dev/null)"; rc=$?
+[[ "$rc" == 0 ]] && ok "resolve --reviewer codex exits 0" || bad "resolve rc=$rc (want 0)"
 [[ "$out" == "codex|openai|subagent|gpt-5.5|yes" ]] \
   && ok "codex falls back to its documented default model" || bad "codex default row was '$out'"
 out="$(MULTI_REVIEW_REVIEWER_MODEL=gpt-9-turbo bash "$SUT" resolve --reviewer codex 2>/dev/null)"
@@ -168,14 +159,12 @@ done
 out="$(bash "$SUT" prompt "$D" --reviewer codex 2>/dev/null)"
 grep -qi 'multi-review skill' <<<"$out" && ok "codex prompt references its skill" || bad "codex skill reference missing"
 
-# --- prompt: skill-less providers get an ACTIONABLE read-then-detect instruction, ---
+# --- prompt: skill-less providers get an ACTIONABLE read-then-act instruction, ---
 # --- not merely a path (a bare path would satisfy a substring check and be useless) ---
 for p in fable gemini; do
   out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
   grep -qiE 'read the protocol contract in full' <<<"$out" \
     && ok "prompt($p) instructs reading the protocol" || bad "prompt($p) lacks the read instruction"
-  grep -qiE 'determine which mode' <<<"$out" \
-    && ok "prompt($p) instructs mode detection" || bad "prompt($p) lacks the mode-detect instruction"
   grep -qF 'protocol/multi-review.md' <<<"$out" \
     && ok "prompt($p) names the protocol file" || bad "prompt($p) lacks the protocol path"
   # No reference to a skill ANYWHERE in a skill-less prompt — not just the exact phrase
@@ -192,11 +181,36 @@ for p in fable gemini; do
     || bad "prompt($p) does not name the protocol contract as the mode authority"
 done
 
-# --- prompt: never hardcodes mode-specific grammar (mode detection stays single-sourced) ---
+# --- prompt: never hardcodes the RETIRED asymmetric/peer-review grammar (superseded by star) ---
 for p in codex fable gemini; do
   out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
   ! grep -qF '[reviewer:' <<<"$out" && ! grep -qF '[concur:' <<<"$out" \
-    && ok "prompt($p) does not hardcode mode grammar" || bad "prompt($p) hardcodes mode grammar"
+    && ok "prompt($p) does not hardcode retired mode grammar" || bad "prompt($p) hardcodes retired mode grammar"
+done
+
+# --- prompt: star is the ONE review model — no mode to detect, no asymmetric/peer-review wording ---
+for p in codex fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  ! grep -qiE 'asymmetric|peer-review|determine which mode' <<<"$out" \
+    && ok "prompt($p) has no asymmetric/peer-review/mode-detection wording" \
+    || bad "prompt($p) still references a retired review mode: $(grep -oiE 'asymmetric|peer-review|determine which mode' <<<"$out")"
+done
+
+# --- prompt: the star finding grammar is stated unconditionally — severity + risk required on ---
+# --- EVERY finding, no local-doc-vs-PR distinction (this is the fix for the whole-branch-review ---
+# --- finding: the old prompt gated the sev/risk requirement on "peer-review (PR) mode", which ---
+# --- contradicts multi-review-star.sh's _table, which hard-fails ANY finding missing either) ---
+for p in codex fable gemini; do
+  out="$(bash "$SUT" prompt "$D" --reviewer "$p" 2>/dev/null)"
+  grep -qF '[finding:<id>|<sev>]' <<<"$out" \
+    && ok "prompt($p) states the star finding grammar" || bad "prompt($p) missing the star finding grammar"
+  grep -qF '`> — risk:' <<<"$out" \
+    && ok "prompt($p) requires the risk line" || bad "prompt($p) missing the required risk line"
+  grep -qi 'required on' <<<"$out" && grep -qi 'every finding' <<<"$out" \
+    && ok "prompt($p) requires severity unconditionally on every finding" \
+    || bad "prompt($p) does not require severity on every finding"
+  grep -qiE 'no mode to.?detect' <<<"$out" \
+    && ok "prompt($p) states there is no mode to detect" || bad "prompt($p) doesn't say there is no mode to detect"
 done
 
 # --- prompt: usage errors and read-only guarantee ---
@@ -278,33 +292,7 @@ nuls_pinned="$(tr -dc '\0' < "${WORK}/argv-pinned.bin" | wc -c | tr -d ' ')"
 [[ "$nuls_pinned" == "7" ]] && ok "pinned argv stream carries exactly 7 NUL terminators (7 elements)" \
   || bad "pinned NUL count was '$nuls_pinned' (want 7)"
 
-# --- notice: same-vendor pairing warns (author Claude + reviewer Fable) ---
-out="$(bash "$SUT" notice claude-opus-4-8 --reviewer fable 2>/dev/null)"; rc=$?
-[[ "$rc" == 0 ]] && ok "notice exits 0 on a same-vendor pairing" || bad "notice same-vendor rc=$rc (want 0)"
-[[ -n "$out" ]] && ok "notice warns on a same-vendor pairing" || bad "notice was silent on same-vendor"
-grep -qi 'same-vendor' <<<"$out" && ok "notice names the same-vendor condition" || bad "notice text unclear: '$out'"
-
-# --- notice: cross-vendor pairing is SILENT (author Claude + reviewer Codex) ---
-out="$(bash "$SUT" notice claude-opus-4-8 --reviewer codex 2>/dev/null)"; rc=$?
-[[ "$rc" == 0 ]] && ok "notice exits 0 on a cross-vendor pairing" || bad "notice cross-vendor rc=$rc (want 0)"
-[[ -z "$out" ]] && ok "notice is silent on a cross-vendor pairing" || bad "notice spoke on cross-vendor: '$out'"
-
-# --- notice: cross-vendor the other way (author GPT + reviewer Gemini) ---
-out="$(bash "$SUT" notice gpt-5-codex --reviewer gemini 2>/dev/null)"
-[[ -z "$out" ]] && ok "notice is silent for GPT author + Gemini reviewer" || bad "notice spoke: '$out'"
-
-# --- notice: an UNRECOGNISED author id fails LOUD, not silent ---
-out="$(bash "$SUT" notice totally-unknown-model --reviewer codex 2>/dev/null)"; rc=$?
-[[ "$rc" == 0 ]] && ok "notice exits 0 on an unmappable author id" || bad "notice unknown-id rc=$rc (want 0)"
-[[ -n "$out" ]] && ok "notice speaks on an unmappable author id (never silent)" || bad "notice was SILENT on an unmappable id"
-grep -qi 'unverified' <<<"$out" && ok "notice marks the status unverified" || bad "unverified wording missing: '$out'"
-grep -qF 'totally-unknown-model' <<<"$out" && ok "notice names the unmappable id" || bad "notice did not name the id"
-
-# --- notice: usage ---
-bash "$SUT" notice >/dev/null 2>&1; rc=$?
-[[ "$rc" == 2 ]] && ok "notice with no author id exits 2" || bad "notice no-arg rc=$rc (want 2)"
-
-# --- vendor-of-model: exposes notice's vendor table directly ---
+# --- vendor-of-model: exposes the vendor table directly ---
 out="$(bash "$SUT" vendor-of-model claude-opus-4-8 2>/dev/null)"; [[ "$out" == "anthropic" ]] && ok "vendor-of-model: claude->anthropic" || bad "vendor-of-model claude (got '$out')"
 out="$(bash "$SUT" vendor-of-model gpt-5.5 2>/dev/null)"; [[ "$out" == "openai" ]] && ok "vendor-of-model: gpt->openai" || bad "vendor-of-model gpt (got '$out')"
 
@@ -456,11 +444,9 @@ bash "$SUT" verify-vendor --baseline "${P%|*}" "${P#*|}" --reviewer codex >/dev/
 # --- vendor mapping accepts the BARE provider-family ids some CLIs disclose ---
 # Gemini CLI discloses `gemini` (no version suffix); a `gemini-*`-only pattern leaves that
 # unmappable, and verify-vendor treats unmappable as a mismatch — so the whole route fails.
-# Probed against a CROSS-vendor reviewer (codex/openai): a google-mapped id must be SILENT
-# (checked, cross-vendor); an unmappable id must print the explicit unverified line.
 for id in gemini gemini-3-pro gemini-2.5-flash; do
-  out="$(bash "$SUT" notice "$id" --reviewer codex 2>/dev/null)"
-  [[ -z "$out" ]] && ok "vendor mapping: '$id' -> google (silent vs openai reviewer)" \
+  out="$(bash "$SUT" vendor-of-model "$id" 2>/dev/null)"
+  [[ "$out" == "google" ]] && ok "vendor mapping: '$id' -> google" \
     || bad "vendor mapping: '$id' unmapped -> '$out'"
 done
 
@@ -481,8 +467,8 @@ printf '%s\n' "${appr[@]}" | grep -qx -- 'auto_edit' \
 
 # --- vendor mapping: bare OpenAI reasoning model ids (codex's own help uses `model="o3"`) ---
 for id in o1 o3 o1-preview o3-mini; do
-  out="$(bash "$SUT" notice "$id" --reviewer gemini 2>/dev/null)"
-  [[ -z "$out" ]] && ok "vendor mapping: '$id' -> openai (silent vs google reviewer)" \
+  out="$(bash "$SUT" vendor-of-model "$id" 2>/dev/null)"
+  [[ "$out" == "openai" ]] && ok "vendor mapping: '$id' -> openai" \
     || bad "vendor mapping: '$id' unmapped -> '$out'"
 done
 

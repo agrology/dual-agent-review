@@ -1,140 +1,133 @@
 # Multi-Review Protocol (file-coordination, opt-in)
 
-> Opt-in. Two peer agents take turns editing ONE design doc. Coordination is an in-file
-> status marker + id'd comment threads. Always ends at a **human approval gate**.
+> Opt-in. One **primary** (Claude) plus N independent **secondary** reviewers coordinate over
+> ONE doc via an in-file status marker + id'd finding threads. Always ends at a **human
+> approval gate**.
 
 ## Roles
 
-- **Author** (Claude, via `/multi-review`): drafts/revises the doc, resolves concerns.
-- **Reviewer** (any external agent you drive separately — Codex, Claude Fable 5, or Gemini):
-  leaves concerns. Driven in its own session — or, optionally, summoned from the author's
-  machine via `scripts/multi-review-reviewer.sh prompt` (see the README).
-- **Autonomous by default:** `/multi-review` runs the whole loop unattended, ending at the
-  same human gate (see the README).
+- **Primary** (Claude, via `/multi-review`): drafts/revises the doc, dispatches secondaries,
+  adjudicates every finding, and decides convergence.
+- **Secondaries** (independent reviewers — `fable` always included, plus any of `codex`,
+  `gemini` you add): each reviews its OWN isolated copy of the doc. A secondary never sees
+  another secondary's findings or the primary's responses — that independence is the point.
+- **Autonomous by default:** `/multi-review` fans out, waits, merges, and adjudicates
+  unattended, ending at the same human gate (see the README).
 
-## Status marker (the single coordination signal)
+## Status markers (two scopes)
 
-One line near the top of the doc:
+**Doc marker** — one line near the top of `<doc>`, the primary's own coordination state:
 
     <!-- multi-review: <state> · round <n>/<max> -->
+    <!-- multi-review-mode: star · reviewers: <ids> -->
 
 | State | Meaning | Whose turn |
 |---|---|---|
-| `awaiting-reviewer` | author's revisions are in | reviewer |
-| `awaiting-author`   | reviewer left concerns    | author |
-| `converged`         | reviewer has no open concerns (terminal) | human gate |
-| `exhausted`         | round bound reached (terminal)          | human gate |
+| `awaiting-secondaries` | primary needs a fresh round of findings | primary fans out |
+| `awaiting-primary` | a round's findings are merged in | primary adjudicates |
+| `converged` | every merged finding has exactly one response; no coverage gap (terminal) | human gate |
+| `exhausted` | round bound reached with findings still unaddressed (terminal) | human gate |
 
-Act ONLY when the marker names your turn. The author keys turn-taking on the **marker
-alone**, never on "did new text appear". `max` defaults to 10.
+**Copy marker** — one line near the top of each secondary's working copy `<doc>.<id>`, reusing
+the reviewer/author vocabulary for that copy's single one-shot turn:
 
-## Comment threads (the channel)
+    <!-- multi-review: <state> · round <n>/<max> -->
+    <!-- multi-review-mode: star -->
 
-- Open a concern: `> [reviewer:<id>] <concern>` with a unique `<id>` (e.g. `r1`, `r2`).
-- Close it:       `> [author: resolved:<id>] <how it was addressed>`.
-- Disclosure (required): a following `> — via <model>` continuation line on each comment.
-- A thread is **open** iff a `[reviewer:<id>]` has no matching `[author: resolved:<id>]`.
-- Ids MUST be unique; reuse a NEW id for follow-ups. Duplicate ids are a hard error.
-- Only top-level `> [..]` lines are control markers; nested `> > ...` is ignored.
+| State | Meaning |
+|---|---|
+| `awaiting-reviewer` | the secondary's turn — leave findings |
+| `awaiting-author`   | the secondary is done; the copy is ready to merge |
 
-## Peer review (PR mode only)
+A secondary acts ONLY when its copy's marker is `awaiting-reviewer`, does exactly one review
+pass, and flips the copy's marker to `awaiting-author` as its FINAL edit (the flip is the
+handoff) — it never sets any other state and never edits `<doc>` itself.
 
-When the doc carries `<!-- multi-review-mode: peer-review -->` in its header (a PR-mode scratch
-file), the review is **symmetric** — both agents are reviewers; neither authored the PR.
+## Findings (the channel)
 
-- Raise a finding: `> [finding:<id>|<sev>] <concern>` + a required `> — via <model>` line, then a
-  required `> — risk: <short risk>` line. `<sev>` is `high`, `med`, or `low`; the parser rejects any
-  other token. Keep the concern to **one short line** and the risk to one clause — no paragraphs.
-- Respond to the *other* agent's finding: `> [concur:<id>]` or `> [dispute:<id>] <why>`
-  + `> — via <model>`. You may not respond to your own finding.
-- Retract your own finding: `> [withdraw:<id>]` + `> — via <model>`.
-- A finding is settled once the other agent responds (agreed/dissent) or the raiser withdraws
-  (dropped). Converged = no finding awaits a response; dissent is allowed and does not block.
-- Ids are unique; the `> — via <model>` line is mandatory and identifies you.
-- Optionally anchor a finding to a changed line: a `> — at <path>:<line>` (or
-  `> — at <path>:<start>-<end>`) line **immediately after** that finding's `> — risk:` line.
-  Use new-file (RIGHT-side) line numbers read from the `## Diff` hunk headers. The anchor is
-  optional — omit it if unsure; only **agreed** anchored findings post inline, and an anchor
-  that does not land on a changed line degrades to the summary. Open, dissented, and
-  un-anchorable findings stay in the summary.
+Under the copy's `## Review` heading, a secondary raises each concern as:
 
-**Scope (PR mode): diff-anchored, referenced files readable.** The reviewed artifact is a PR
-diff. Every finding MUST trace to a changed hunk — a line the PR adds or removes. Pre-existing
-issues the diff does not touch are out of scope; do not report them. But a changed hunk can
-*introduce* a conflict with code or docs it references (e.g. a revised K01 claim that
-contradicts K301's existing, unchanged behavior) — that conflict is diff-introduced and
-therefore in scope. To evaluate it, the reviewer MAY read the **current bodies of repo files
-the diff directly references**, solely to check the change is self-consistent. This is a
-narrow, local-read allowance: no whole-corpus sweeps, no upload, and any finding it produces
-must still name the changed hunk that introduces the conflict.
+- `> [finding:<id>|<sev>] <concern>` — a fresh id scoped to this copy (`r1`, `r2`, …; the
+  primary namespaces it `<provider>-rd<N>-<id>` on merge, so you never need to coordinate ids
+  with anyone else). `<sev>` is `high`, `med`, or `low` — the parser rejects any other token.
+  Keep the concern to one short line.
+- `> — via <model>` — required disclosure line, immediately after. Must be your real model id.
+- `> — risk: <short risk>` — required, immediately after that. One clause, no paragraphs.
+- Optionally, `> — at <path>:<line>` (or `> — at <path>:<start>-<end>`) immediately after the
+  risk line, using RIGHT-side new-file line numbers. This only matters when the reviewed doc
+  is a PR diff scratch — omit it for a design doc. An anchor that doesn't land on a changed
+  hunk degrades to the summary rather than posting inline.
 
-## Star review (multi-secondary)
+A secondary raises findings only — it never responds to a finding (its own or anyone else's)
+and never converges the review. Only top-level `> [..]` lines are control markers; nested
+`> > ...` is ignored. Ids must be unique within the copy; a duplicate id is a hard error.
 
-When a copy carries `<!-- multi-review-mode: star -->` in its header and the marker is
-`awaiting-reviewer`, you are one **secondary** reviewing an isolated copy of a design doc. You
-never see other secondaries or the primary's responses — that independence is the point.
+## Primary adjudication
 
-- **Scope: the whole document body.** Star is NOT diff-scoped (unlike peer-review); there is no
-  `## Diff`. Review the design on its merits, end to end.
-- Raise a finding: `> [finding:<id>|<sev>] <concern>` + a required `> — via <model>` line + a
-  required `> — risk: <short risk>` line. `<sev>` is `high`, `med`, or `low`. One short line per
-  concern, one clause per risk.
-- Use fresh short ids (`r1`, `r2`, …) scoped to this copy — the orchestrator namespaces them by
-  provider and round (`<provider>-rd<N>-<id>`), so you never coordinate ids with anyone.
-- You do not respond to findings and you do not converge — a secondary raises findings only. The
-  primary ingests, agrees/disputes, and decides convergence.
-- Flip the marker `awaiting-reviewer` → `awaiting-author` as your FINAL edit (the flip is the
-  handoff). Read only this copy; do not implement, commit, or open a PR.
-
-**Primary (star).** On the merged doc (marker `awaiting-primary`) the primary responds to every
-merged finding with **exactly one** of these — NOT the asymmetric `> [author: resolved:<id>]`,
-which star's `check-converged` ignores (using it would loop forever, never converging):
+On the merged doc (marker `awaiting-primary`), the primary responds to **every** merged
+finding with exactly one of:
 
 - `> [agree:<ns-id>]` + `> — via <primary-model-id>` — accept the finding and address it in the
   doc body, or
-- `> [dispute:<ns-id>] <one-line reason>` + `> — via <primary-model-id>` — reject it, tersely. A
-  dispute never forces a round.
+- `> [dispute:<ns-id>] <one-line reason>` + `> — via <primary-model-id>` — reject it, tersely.
+  A dispute never forces another round.
 
-Convergence is **coverage, not consensus**: every merged finding needs exactly one `agree`/`dispute`;
-disputes are expected and do not block. The human gate settles disputes.
+The primary may also leave a human-gate-only note that is NOT a finding and never affects
+convergence: `> [observation] <text>` + `> — via <primary-model-id>`.
 
-**Model-id distinctness:** every secondary and the primary must disclose their own *real* model
-id on `> — via <model>`. The primary's disclosed id must differ from every secondary's — the
+Convergence is **coverage, not consensus**: every merged finding needs exactly one
+`agree`/`dispute`; disputes are expected and do not block. The human gate settles disputes.
+
+**Model-id distinctness:** every secondary and the primary discloses its own *real* model id
+on `> — via <model>`. The primary's disclosed id must differ from every secondary's — the
 self-response guard fails a response whose model equals the finding's raiser model, so a
-Claude-family secondary (e.g. `fable`) colliding with a Claude primary id would make convergence
-impossible.
+Claude-family secondary (e.g. `fable`) colliding with a Claude primary id would make
+convergence impossible.
 
-## Turn-taking discipline
+## Fable floor & independence
 
-- **Reviewer:** write all concerns first, then flip `awaiting-reviewer` → `awaiting-author`
-  **last** (the flip is the atomic handoff). Set `converged` instead only when no
-  `[reviewer:<id>]` lacks its `[author: resolved:<id>]`.
-- **Author:** address each open id, append `[author: resolved:<id>]`, then advance the
-  marker via the tooling. Stop at the round bound.
+- `fable` is always included in the secondary set — it runs in-harness (no CLI, no extra
+  auth), so a round always has at least one admissible secondary even if every external
+  provider is unavailable or gets quarantined.
+- A secondary is **quarantined** — excluded from the merge, with its reason recorded durably
+  in the doc — when it can't be dispatched, times out, or fails vendor verification (its
+  disclosed model doesn't match the vendor it was dispatched as). All secondaries quarantined
+  in the same round, including `fable`, is an anomaly: the primary stops rather than merging a
+  round with zero trustworthy findings.
+- A later round re-dispatches the FULL resolved secondary set, not just previously-admitted
+  ones — a provider quarantined in round 1 gets a fresh independent copy again in round 2.
+- The gate summary warns when the round's admitted secondaries are all same-vendor as the
+  primary: `⚠ Independence: ... no independent cross-vendor perspective this run.` Add
+  `--reviewers codex` (or `gemini`) for architectural independence.
 
 ## Bounds & terminal state
 
-Round = one reviewer pass + one author pass; the author increments on hand-back. At
-`round > max` the marker becomes `exhausted`. Convergence or exhaustion both stop the loop
-and present the annotated doc; a **human approves** before any implementation or PR.
+Round = one secondary fan-out pass + one primary adjudication pass. **Adaptive re-fan-out**:
+the primary re-enters `awaiting-secondaries` only while the previous round produced at least
+one new admitted finding and the round is still under `max`; it converges as soon as a round
+goes dry. At `round > max` the doc marker becomes `exhausted`. Convergence or exhaustion both
+stop the loop and present the annotated doc; a **human approves** before any implementation or
+PR.
 
 ## Egress
 
-- **Mechanical (author side):** `/multi-review` refuses to arm on any path outside
+- **Mechanical (primary side):** `/multi-review` refuses to arm on any path outside
   `MULTI_REVIEW_DOC_DIRS` (default `docs/specs docs/plans`), or on a symlink/`../` escape.
-- **Protocol requirement (reviewer side, trusted):** a conforming reviewer reads only the
-  doc it is pointed at — plus, in PR mode, the current bodies of repo files that doc's diff
-  directly references (a local read, for the diff-consistency checks described under "Scope"
-  above) — captures no env/secrets, and uploads nothing beyond the doc content without explicit
-  authorization. This is a trust contract, not a mechanical guarantee.
-- **PR mode (author side):** the reviewed artifact is a GitHub PR, but coordination is still a
-  local scratch file under `.multi-review/reviews/`. Only the **author** touches GitHub — it
+- **Protocol requirement (secondary side, trusted):** a conforming secondary reads only the
+  copy it is pointed at, captures no env/secrets, and uploads nothing beyond that copy's
+  content without explicit authorization. This is a trust contract, not a mechanical
+  guarantee.
+- **PR mode (primary side):** when the reviewed artifact is a GitHub PR, coordination is still
+  a local scratch file under `.multi-review/reviews/`. Only the **primary** touches GitHub — it
   reads the PR (`gh pr view`/`gh pr diff`) on ingest and posts **exactly one** neutral review
-  (`gh pr review --comment`) on publish, and the publish is **human-gated**. The reviewer
-  touches no GitHub: it reads the local scratch file (and, for diff-consistency, the local repo
-  files its diff references — see "Scope" under Peer review) and uploads nothing.
+  (`gh pr review --comment`) on publish, and the publish is **human-gated**. Agreed findings
+  carrying a valid `> — at <path>:<line>` anchor post as inline comments inside that single
+  review; everything else stays in the top-level summary. Secondaries touch no GitHub: they
+  read only their local working copy.
 
 ## Supersedes
 
-The earlier subprocess/exit-code protocol is superseded for interactive use by the
-file-coordination model.
+The asymmetric single-reviewer grammar (`> [reviewer:]` / `> [author: resolved:]`) and the
+two-agent peer-review grammar (`> [finding:]` answered by `> [concur:]` / `> [dispute:]`) are
+both superseded by star: every review — local doc or PR — now runs primary + N independent
+secondaries.

@@ -524,7 +524,7 @@ out="$(bash "$SUT" compose-inline "$OPEN_DOC" 2>/dev/null)"
 [[ -z "$out" ]] && ok "compose-inline: open anchored finding excluded" || bad "compose-inline leaked open (got '$out')"
 
 ## --- malformed anchor: PRESENT-but-malformed hard-fails; ABSENT falls to summary (fix for the
-## silent-degrade-vs-peer finding). Mirrors multi-review-peer.sh's _table fail() rejection cases.
+## silent-degrade finding). Same fail-loud convention _table uses on a malformed finding block.
 
 # (a) ABSENT anchor (no "> — at" line at all) -> compose-inline still succeeds (exit 0) and
 # simply omits the finding from inline output — this is the behavior that must be PRESERVED.
