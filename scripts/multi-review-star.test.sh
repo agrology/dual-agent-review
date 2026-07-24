@@ -11,6 +11,12 @@ bad() { echo "  FAIL: $1"; fails=$((fails+1)); }
 # mkdoc <name> <header-extra-lines...> -> path with H1 + extras + a ## Review section
 mkdoc() { local p="${WORK}/$1"; shift; { echo "# Doc"; printf '%s\n' "$@"; echo; echo "## Review"; echo; } > "$p"; echo "$p"; }
 
+# mkstar <name> <review-line...> : a star doc; each arg is emitted verbatim into ## Review.
+# Callers pass finished "> [finding:<provider>-rd1-<id>|<sev>] ..." + "> — via ..." + "> — risk: ..."
+# + "> [agree:<same-ns-id>]" + "> — via <primary>" blocks. The ns-id prefix (<provider>) is what
+# gate-summary reads to learn which secondaries were admitted — no manifest required.
+mkstar() { local p="${WORK}/$1"; shift; { echo "# Doc"; echo "<!-- multi-review-mode: star -->"; echo; echo "## Review"; echo; printf '%s\n' "$@"; } > "$p"; echo "$p"; }
+
 # --- mode ---
 # star hint (bare) -> star
 D="$(mkdoc star1.md '<!-- multi-review-mode: star -->')"
@@ -358,6 +364,28 @@ echo "$out" | grep -q 'nit naming' && echo "$out" | grep -q 'style pref' && ok "
 echo "$out" | grep -q 'fable' && ok "gate-summary: quarantine named" || bad "gate quarantine"
 # pure read — doc unchanged
 [[ "$before" == "$after" ]] && ok "gate-summary: does not mutate doc" || bad "gate mutated doc"
+
+# --- gate-summary --flag-independence (opt-in; without it, output is byte-identical) ---
+# CODEX_DOC: one agreed cross-vendor (codex) finding; primary is anthropic (claude-opus-4-8)
+CODEX_DOC="$(mkstar codexdoc.md \
+  '> [finding:codex-rd1-a|med] cross-vendor concern' '> — via gpt-5.5' '> — risk: some risk' \
+  '> [agree:codex-rd1-a]' '> — via claude-opus-4-8')"
+# FABLE_ONLY_DOC: one agreed same-vendor (fable) finding; primary anthropic
+FABLE_ONLY_DOC="$(mkstar fabledoc.md \
+  '> [finding:fable-rd1-a|low] same-vendor concern' '> — via claude-fable-5' '> — risk: some risk' \
+  '> [agree:fable-rd1-a]' '> — via claude-opus-4-8')"
+
+# fable-only review, anthropic primary -> independence warning printed
+out="$(bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 --flag-independence 2>/dev/null)"
+printf '%s' "$out" | grep -q "no independent cross-vendor perspective" && ok "independence: fable-only warns" || bad "independence fable-only"
+
+# codex admitted -> no warning
+out="$(bash "$SUT" gate-summary "$CODEX_DOC" claude-opus-4-8 --flag-independence 2>/dev/null)"
+printf '%s' "$out" | grep -q "no independent cross-vendor perspective" && bad "independence codex should be silent" || ok "independence: codex silent"
+
+# without the flag -> no independence line at all
+a="$(bash "$SUT" gate-summary "$FABLE_ONLY_DOC" claude-opus-4-8 2>/dev/null)"
+printf '%s' "$a" | grep -q "cross-vendor" && bad "independence leaked without flag" || ok "independence: opt-in only"
 
 echo
 if (( fails > 0 )); then echo "FAILED: $fails"; exit 1; fi

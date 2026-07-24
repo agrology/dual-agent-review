@@ -407,7 +407,14 @@ cmd_check_converged() {
 }
 
 cmd_gate_summary() {
-  local doc="${1:?doc}" primary="${2:?primary-model-id}" t
+  local doc="${1:?doc}" primary="${2:?primary-model-id}" t flag_independence=0
+  shift 2
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --flag-independence) flag_independence=1; shift ;;
+      *) shift ;;
+    esac
+  done
   [[ -f "$doc" ]] || die "doc not found: $doc" 1
   t="$(_table "$doc")" || die "gate-summary: contract violation in $doc" 1
 
@@ -443,6 +450,28 @@ cmd_gate_summary() {
     $3=="agreed"{ printf "  agreed: %s — %s (via %s)\n", $7, $5, $2 }'
   echo "———"
   echo "🤖 Star review gate summary — primary ${primary}. Human gate decides; nothing auto-merges."
+
+  if (( flag_independence )); then
+    # Admitted providers come from the DOCUMENT's finding ns-id prefixes (same
+    # <provider>-rd<N>-<id> split the awk summary above already uses for secs[]) — not a
+    # manifest sidecar — so gate-summary stays standalone over just <doc> <primary-model-id>.
+    local admitted_providers pvendor admitted_xvendor=0 p v q_xvendor qp qv
+    admitted_providers="$(printf '%s\n' "$t" | awk -F'\t' 'NF{p=$1; sub(/-rd.*/,"",p); print p}' | sort -u)"
+    pvendor="$("$REVIEWER_SH" vendor-of-model "$primary" 2>/dev/null || echo unknown)"
+    for p in $admitted_providers; do
+      v="$("$REVIEWER_SH" resolve --reviewer "$p" 2>/dev/null | cut -d'|' -f2)"
+      [[ -n "$v" && "$v" != "$pvendor" ]] && admitted_xvendor=1
+    done
+    if (( ! admitted_xvendor )); then
+      q_xvendor="$(grep -oE '^<!-- star-quarantined: [a-z0-9]+ ' "$doc" | awk '{print $3}' \
+        | while read -r qp; do qv="$("$REVIEWER_SH" resolve --reviewer "$qp" 2>/dev/null | cut -d'|' -f2)"; [[ -n "$qv" && "$qv" != "$pvendor" ]] && echo "$qp"; done | head -1)"
+      if [[ -n "$q_xvendor" ]]; then
+        echo "⚠ Independence: a cross-vendor secondary (${q_xvendor}) was attempted but quarantined — this run has no independent cross-vendor perspective."
+      else
+        echo "⚠ Independence: reviewed only by same-vendor secondaries — no independent cross-vendor perspective this run. Add --reviewers codex (or gemini) for architectural independence."
+      fi
+    fi
+  fi
 }
 
 main() {
