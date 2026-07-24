@@ -87,9 +87,9 @@ grep -q '^## PR description' "$OUT" && ok "seed: description section" || bad "se
 grep -q '^## Diff'           "$OUT" && ok "seed: diff section"        || bad "seed diff section missing"
 grep -q '^## Review'         "$OUT" && ok "seed: review section"      || bad "seed review section missing"
 
-# seed stamps the peer-review mode hint in the header (before the first ## section)
-grep -qxF '<!-- multi-review-mode: peer-review -->' "$OUT" && ok "seed: writes mode hint" || bad "seed mode hint missing"
-awk '/^## /{exit} {print}' "$OUT" | grep -qF 'multi-review-mode: peer-review' && ok "seed: mode hint is in the header region" || bad "seed mode hint not in header"
+# seed writes NO mode hint — the command's star Arm inserts the star header (mode hint + status
+# marker) after the H1, so seeding one would create a duplicate. (Star-universal, PR-B B1.)
+awk '/^## /{exit} {print}' "$OUT" | grep -qF 'multi-review-mode' && bad "seed must not stamp a mode hint (Arm does)" || ok "seed: no mode hint (Arm inserts star header)"
 
 # diff fence sized to 4 (diff contains a 3-backtick run)
 grep -qx '````' "$OUT" && ok "seed: diff fence sized up to 4" || bad "seed fence not sized up"

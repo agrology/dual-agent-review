@@ -47,7 +47,6 @@ cmd_seed() { # <out> <title> <url> <author> <branch> <desc-file> <diff-file>
   local fence; fence="$(cmd_fence "$difff")"
   {
     printf '# PR review: %s\n\n' "$title"
-    printf '%s\n\n' '<!-- multi-review-mode: peer-review -->'
     printf -- '- **PR:** %s\n'     "$url"
     printf -- '- **Author:** %s\n' "$author"
     printf -- '- **Branch:** %s\n\n' "$branch"
